@@ -1,0 +1,51 @@
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+.keys/
+keys/
+
+# Vendored binaries (built from source)
+vendor/
+
+# Bun / Node
+node_modules/
+bun.lockb
+.bun/
+dist/
+build/
+.turbo/
+.next/
+out/
+
+# TypeScript
+*.tsbuildinfo
+
+# Python (for AXL Python integrations)
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.uv/
+.python-version
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/lib/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs / scratch
+*.log
+logs/
+tmp/
+.tmp/

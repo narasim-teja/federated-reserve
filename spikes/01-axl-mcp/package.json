@@ -1,0 +1,17 @@
+{
+  "name": "spike-01-axl-mcp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "server": "bun run server.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.21.0",
+    "hono": "^4.10.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}

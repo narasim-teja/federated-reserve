@@ -1,0 +1,8 @@
+{
+  "name": "spike-03-uniswap-quote",
+  "private": true,
+  "type": "module",
+  "scripts": { "quote": "bun run quote.ts" },
+  "dependencies": {},
+  "devDependencies": { "@types/bun": "latest", "typescript": "^5.6.0" }
+}
