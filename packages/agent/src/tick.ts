@@ -8,6 +8,7 @@
 
 import type { AgentConfig } from './config.ts';
 import type { AxlClient } from './axl-client.ts';
+import type { MeshDiscovery } from './discovery.ts';
 import { broadcastIndicator } from './broadcast.ts';
 
 const SAMPLE_INDICATORS = [
@@ -16,7 +17,11 @@ const SAMPLE_INDICATORS = [
   { indicator: 'tax_revenue' as const, base: 3.5, source: 'NASBO-stub' },
 ];
 
-export function startTickLoop(cfg: AgentConfig, axl: AxlClient): { stop: () => void } {
+export function startTickLoop(
+  cfg: AgentConfig,
+  axl: AxlClient,
+  discovery: MeshDiscovery,
+): { stop: () => void } {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let tickCount = 0;
@@ -30,7 +35,7 @@ export function startTickLoop(cfg: AgentConfig, axl: AxlClient): { stop: () => v
       // proving the pipe works.
       const sample = SAMPLE_INDICATORS[tickCount % SAMPLE_INDICATORS.length]!;
       const value = sample.base + (Math.sin(tickCount + cfg.state.fips) * 0.5);
-      await broadcastIndicator(cfg, axl, {
+      await broadcastIndicator(cfg, axl, discovery, {
         state_fips: cfg.state.fips,
         indicator: sample.indicator,
         value: Number(value.toFixed(3)),

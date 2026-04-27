@@ -41,7 +41,7 @@
 
 **What it is:** Peer-to-peer network node, single Go binary. Runs on each agent's machine. Exposes `localhost:9002` HTTP bridge. Handles encryption (TLS + Yggdrasil), routing, peer discovery. Userspace, runs behind NATs without port forwarding (except for at least one bootstrap node which must be publicly reachable).
 
-> **Phase 0 finding — "MCP/A2A support" is *not* in-process.** AXL's `/mcp/{peer_id}/{service}` and `/a2a/{peer_id}` endpoints are bridges that forward inbound JSON-RPC to **separate local services** configured via `router_addr` (default `:9003`) and `a2a_addr` (default `:9004`). The reference implementations are Python (`vendor/axl/integrations/mcp_routing/` and `a2a_serving/`). Our TypeScript MCP servers self-register with the Python MCP Router via `POST :9003/register {service, endpoint}`. The bundled A2A server auto-derives skills from registered MCP services as request/response wrappers — **it cannot host the rich multi-turn A2A task lifecycles** described later in this doc. Phase 1 must include a custom TypeScript A2A server using `@a2a-js/sdk` that AXL forwards to via `a2a_addr` instead.
+> **Phase 0 finding — "MCP/A2A support" is *not* in-process.** AXL's `/mcp/{peer_id}/{service}` and `/a2a/{peer_id}` endpoints are bridges that forward inbound JSON-RPC to **separate local services** configured via `router_addr` (default `:9003`) and `a2a_addr` (default `:9004`). The reference implementations are Python (`vendor/axl/integrations/mcp_routing/` and `a2a_serving/`). Our TypeScript MCP servers self-register with the Python MCP Router via `POST :9003/register {service, endpoint}`. The bundled A2A server auto-derives skills from registered MCP services as request/response wrappers — **it cannot host the rich multi-turn A2A task lifecycles** described later in this doc. **Phase 1 shipped a custom TS A2A server** using `@a2a-js/sdk` that AXL forwards to via `a2a_addr` ([`packages/agent/src/a2a/server.ts`](../packages/agent/src/a2a/server.ts)).
 
 **Docs:** https://docs.gensyn.ai/tech/agent-exchange-layer
 **Get started:** https://docs.gensyn.ai/tech/agent-exchange-layer/get-started
@@ -52,6 +52,7 @@
 - Each agent process runs an AXL node alongside it. Agent talks to its local AXL via HTTP on `localhost:9002`.
 - AXL is the **transport binding** under MCP and A2A. Calling a remote agent's MCP tool is `POST localhost:9002/mcp/{peer_id}/{service}`. Calling a remote A2A skill is `POST localhost:9002/a2a/{peer_id}`. AXL wraps the JSON-RPC body in a transport envelope, routes it over Yggdrasil, and unwraps the response. The application sees a normal JSON-RPC response.
 - **Application-level fan-out** for broadcasts where every peer should hear (Fed rate announcements, shock events, economic indicator updates). **AXL does not ship a native pubsub primitive** — its HTTP surface is `/topology`, `/send`, `/recv`, `/mcp/`, `/a2a/`. Phase 1 broadcasts are implemented as O(N) MCP fan-outs over `/mcp/{peer}/treasurer` against the discovered peer set. (Earlier drafts of this doc framed this as "GossipSub"; that's aspirational vocabulary, not an AXL feature.)
+- **MCP gossip discovery** — `/topology.tree` is asymmetric and lags for non-hub nodes (a leaf may not see its sibling for several minutes even though routing works). Each agent exposes a `share_topology` MCP tool returning its known pubkey set, and runs a periodic `MeshDiscovery` loop unioning own `/topology` with each direct peer's `share_topology` response. Converges in ≤10s; replaces dependence on the spanning-tree being in steady state. See [`packages/agent/src/discovery.ts`](../packages/agent/src/discovery.ts).
 - **Convergecast** for tree-aggregated reporting (Federal agent collecting aggregate state metrics over the spanning tree). Built on the same fan-out + MCP `tools/call` mechanism, with the Federal agent acting as the aggregation root.
 
 **Qualification compliance:**
@@ -215,8 +216,9 @@ OG_STORAGE_URL="https://storage-testnet.0g.ai"
 
 ### Per-agent process
 
-Validated in Phase 0. An "agent" is **four cooperating processes on the same
-host (or container)**, wired together by AXL's `router_addr`/`a2a_addr` config.
+Validated in Phase 0 (process layout) and Phase 1 (Bun runtime + custom TS
+A2A server). An "agent" is **four cooperating processes on the same host
+(or container)**, wired together by AXL's `router_addr`/`a2a_addr` config.
 
 > **This is still fully P2P.** The "no central broker" qualification refers
 > to *inter-agent* communication. Each agent's MCP Router and A2A server are
@@ -234,19 +236,25 @@ host (or container)**, wired together by AXL's `router_addr`/`a2a_addr` config.
 │  Tick loop (1hr real = 1 quarter sim)              │  │ port :9003           │
 │   ↓                                                │  │  POST /register      │
 │  1. Fetch state snapshot from data plane           │  │  POST /route         │
-│  2. Read own memory from 0G Storage (KV)           │  └─────────▲────────────┘
-│  3. Reason via OpenRouter (Claude / cheaper model) │            │
+│  2. Read own memory from 0G Storage (KV) [Phase 2] │  └─────────▲────────────┘
+│  3. Reason via OpenRouter (Claude) [Phase 2]       │            │
 │  4. Take actions:                                  │  ┌─────────┴────────────┐
-│     - Broadcast updates (app-level MCP fan-out)    │  │ Custom TS A2A server │
-│     - Send MCP calls  (POST :9002/mcp/{peer}/...)  │  │ (Phase 1 deliverable;│
-│     - Send A2A skills (POST :9002/a2a/{peer})      │  │  uses @a2a-js/sdk)   │
-│     - Execute swaps (Uniswap Trading API)          │  │ port :9004           │
-│  5. Reflect on prior tick outcomes                 │  └─────────▲────────────┘
-│  6. Persist to 0G Storage (KV update + Log append) │            │
+│     - Broadcast updates (app-level MCP fan-out     │  │ Custom TS A2A server │
+│       over discovery view, see MeshDiscovery)      │  │ (Phase 1 ✅;         │
+│     - Send MCP calls  (POST :9002/mcp/{peer}/...)  │  │  uses @a2a-js/sdk)   │
+│     - Send A2A skills (POST :9002/a2a/{peer})      │  │ port :9004           │
+│     - Execute swaps (Uniswap Trading API) [Phase 3]│  └─────────▲────────────┘
+│  5. Reflect on prior tick outcomes [Phase 2]       │            │
+│  6. Persist to 0G Storage [Phase 2]                │            │
 │                                                    │            │
-│  Concurrent: TS MCP server (Bun.serve + MCP SDK    │            │
-│  WebStandardStreamableHTTPServerTransport, port    │            │
-│  :7100; registers with router on startup)          │            │
+│  Concurrent in the same Bun process:               │            │
+│   - TS MCP server (Bun.serve + MCP SDK port :7100, │            │
+│     registers with router on startup; tools include│            │
+│     query_treasury, share_economic_indicator,      │            │
+│     share_topology)                                │            │
+│   - MeshDiscovery loop (10s interval; 1-hop MCP    │            │
+│     gossip — unions /topology with peers'          │            │
+│     share_topology to bridge spanning-tree lag)    │            │
 │                                                    │            │
 └────────────┬───────────────────────────────────────┘            │
              │ inbound MCP/A2A JSON-RPC                            │
@@ -258,24 +266,32 @@ host (or container)**, wired together by AXL's `router_addr`/`a2a_addr` config.
 └────────────────────────────────────────────────────┘
 ```
 
-**Startup ordering matters** (Phase 0 spike-02 finding): AXL node → MCP
-router → MCP server → A2A server → caller. The A2A server fetches `/topology`
-from AXL synchronously on startup to learn its own peer ID.
+**Startup ordering matters** (validated by Phase 0 spike-02 + Phase 1 entry
+point): AXL node → MCP router → MCP server → register-with-router → A2A
+server → MeshDiscovery loop → tick loop → caller. The A2A server fetches
+`/topology` from AXL synchronously on startup to learn its own peer ID.
+Concrete reference: [`packages/agent/src/index.ts`](../packages/agent/src/index.ts).
 
 ### Repository layout
 
-> Phase 0 added the `vendor/`, `.venv/`, `.keys/`, `spikes/`, and
-> `scripts/derive-wallets.sh` entries below. `docs/PHASE0_REPORT.md` is the
-> Phase 0 summary. `packages/`, `contracts/`, `deploy/` arrive in Phases 1+.
+> Phase 0 added `vendor/`, `.venv/`, `.keys/`, `spikes/`, and
+> `scripts/derive-wallets.sh`. Phase 1 added `packages/{shared,agent}/`,
+> `mesh/configs/`, the local-mesh runner, and the four gate-test scripts.
+> Phases 2-6 add the rest in-place — paths annotated with their phase.
 
 ```
 federated-reserve/
 ├── docs/
 │   ├── PROJECT.md              # vision doc
 │   ├── TECHNICAL.md            # this doc
-│   └── PHASE0_REPORT.md        # Phase 0 summary (added 2026-04-27)
+│   ├── PHASE0_REPORT.md        # Phase 0 summary (2026-04-27)
+│   └── PHASE1_REPORT.md        # Phase 1 summary (2026-04-27)
 ├── README.md                   # onboarding
 ├── FEEDBACK.md                 # builder-experience notes (Uniswap track requirement)
+├── package.json                # root — Bun workspaces
+├── tsconfig.base.json          # shared TS config
+├── biome.json                  # lint + format
+├── bun.lock
 ├── .env.example                # template for .env / .env.local
 ├── .gitignore
 ├── vendor/
@@ -284,75 +300,64 @@ federated-reserve/
 ├── .venv/                      # Python venv with mcp_routing + a2a_serving
 ├── .keys/                      # ed25519 PEMs for AXL nodes (gitignored)
 ├── spikes/                     # Phase 0 dependency spikes (00 through 06)
+├── mesh/
+│   └── configs/                # AXL node configs for the local 3-agent mesh
+│       └── node-{ma,ca,tx}.json
 ├── scripts/
-│   ├── derive-wallets.sh       # Phase 0; re-derives agent hierarchy from MASTER_SEED
-│   ├── deploy-contracts.ts     # Phase 3
-│   ├── seed-pools.ts           # Phase 3
-│   ├── mint-inft.ts            # Phase 5
-│   └── replay-historical.ts    # Phase 6
+│   ├── derive-wallets.sh       # [Phase 0] re-derives agent hierarchy from MASTER_SEED
+│   ├── run-local-mesh.sh       # [Phase 1] boots 3 AXL + 3 routers + 3 agents
+│   ├── test-mcp-unicast.sh     # [Phase 1 gate test] CA → MA query_treasury
+│   ├── test-mcp-discovery.sh   # [Phase 1 gate test] gossip convergence
+│   ├── test-mcp-broadcast.sh   # [Phase 1 gate test] CA → {MA,TX} fan-out
+│   ├── test-a2a-negotiate.sh   # [Phase 1 gate test] multi-turn lifecycle
+│   ├── deploy-contracts.ts     # [Phase 3]
+│   ├── seed-pools.ts           # [Phase 3]
+│   ├── mint-inft.ts            # [Phase 5]
+│   └── replay-historical.ts    # [Phase 6]
 ├── packages/
-│   ├── agent/                  # main agent runtime
+│   ├── shared/                 # [Phase 1] shared types, Zod schemas
 │   │   ├── src/
-│   │   │   ├── index.ts        # entry point, AXL registration
-│   │   │   ├── tick.ts         # main loop
-│   │   │   ├── reason.ts       # OpenRouter integration (NEVER @anthropic-ai/sdk direct)
-│   │   │   ├── memory.ts       # 0G Storage wrapper
-│   │   │   ├── axl.ts          # AXL HTTP client wrapper (raw /send, /recv, /topology)
-│   │   │   ├── mcp-router-client.ts # registers/deregisters with Python MCP Router on :9003
-│   │   │   ├── mcp/            # MCP tools (single-shot operations)
-│   │   │   │   ├── server.ts
-│   │   │   │   └── tools/      # query_treasury, execute_swap, ...
-│   │   │   ├── a2a/            # A2A skills — custom TS server replacing bundled Python a2a_serving
-│   │   │   │   ├── server.ts   # Bun.serve on the port AXL points a2a_addr at
-│   │   │   │   ├── card.ts     # AgentCard generator (per-state)
-│   │   │   │   ├── executor.ts # AgentExecutor implementation
-│   │   │   │   └── skills/     # negotiate-bilateral-swap, bond-auction, ...
-│   │   │   ├── policy/         # decision logic per state
-│   │   │   ├── treasury.ts     # portfolio mgmt
-│   │   │   └── execute.ts      # Uniswap execution
+│   │   │   ├── states.ts       # 50 + DC + PR metadata (FIPS, abbr, region, tier)
+│   │   │   ├── mcp-schemas.ts  # Zod schemas: query_treasury, share_economic_indicator,
+│   │   │   │                   # share_topology
+│   │   │   ├── a2a-types.ts    # A2A skill payload types (negotiate-bilateral-swap)
+│   │   │   └── index.ts
 │   │   └── package.json
-│   ├── shared/                 # shared types, schemas
+│   ├── agent/                  # [Phase 1] per-agent runtime — single Bun process
 │   │   ├── src/
-│   │   │   ├── types.ts
-│   │   │   ├── mcp-schemas.ts  # Zod schemas for MCP tools
-│   │   │   ├── a2a-types.ts    # A2A skill payload types
-│   │   │   └── states.ts       # state metadata
-│   │   └── package.json
-│   ├── data-plane/             # ingestion service
-│   │   └── src/
-│   │       ├── fred.ts
-│   │       ├── bls.ts
-│   │       ├── gdelt.ts
-│   │       ├── noaa.ts
-│   │       └── server.ts
-│   ├── observer/               # frontend WS gateway
-│   │   └── src/
-│   │       └── server.ts
-│   └── frontend/               # Next.js
-│       ├── app/
-│       ├── components/
+│   │   │   ├── index.ts            # entry point — startup/shutdown ordering
+│   │   │   ├── config.ts           # env → AgentConfig
+│   │   │   ├── state.ts            # in-memory state ([Phase 2] swaps for 0G Storage)
+│   │   │   ├── axl-client.ts       # /topology /send /recv /mcp /a2a wrapper
+│   │   │   ├── mcp-router-client.ts# Python MCP Router register/deregister
+│   │   │   ├── discovery.ts        # 1-hop MCP gossip (share_topology refresh loop)
+│   │   │   ├── broadcast.ts        # app-level fan-out helper (uses discovery)
+│   │   │   ├── tick.ts             # heartbeat + periodic indicator broadcast
+│   │   │   ├── mcp/
+│   │   │   │   └── server.ts       # factory-pattern MCP server (Bun.serve)
+│   │   │   └── a2a/
+│   │   │       ├── card.ts         # AgentCard generator per state
+│   │   │       ├── server.ts       # @a2a-js/sdk JsonRpcTransportHandler on Bun.serve
+│   │   │       └── executor.ts     # AgentExecutor — negotiate-bilateral-swap stub
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   ├── data-plane/             # [Phase 2] ingestion service
+│   │   └── src/{fred,bls,gdelt,noaa,server}.ts
+│   ├── observer/               # [Phase 5] frontend WS gateway
+│   │   └── src/server.ts
+│   └── frontend/               # [Phase 5] Next.js
+│       ├── app/, components/
 │       └── package.json
-├── contracts/                  # Foundry project, npm-managed
+├── contracts/                  # [Phase 3] Foundry, npm-managed
 │   ├── foundry.toml
 │   ├── package.json
-│   ├── src/
-│   │   ├── StateToken.sol
-│   │   ├── BondToken.sol
-│   │   └── INFT7857.sol
+│   ├── src/{StateToken,BondToken,INFT7857}.sol
 │   ├── script/
 │   └── test/
-├── deploy/
-│   ├── docker/
-│   │   └── agent.Dockerfile
-│   ├── compose/
-│   │   └── local-mesh.yml      # local 10-agent dev mesh
-│   └── fly/
-│       └── agent.fly.toml
-└── scripts/
-    ├── deploy-contracts.ts
-    ├── seed-pools.ts
-    ├── mint-inft.ts
-    └── replay-historical.ts
+└── deploy/                     # [Phase 6]
+    ├── docker/agent.Dockerfile
+    ├── compose/local-mesh.yml
+    └── fly/agent.fly.toml
 ```
 
 ---
@@ -427,6 +432,14 @@ query_credit_rating(state: USStateFIPS) -> {
   rating: string,
   last_updated: ISO8601,
   factors: Record<string, number>,
+}
+
+// [Phase 1 ✅] mesh discovery — used by MeshDiscovery to bridge the
+// /topology.tree convergence lag. Caller takes the union over all peers.
+share_topology() -> {
+  responder_pubkey: string,
+  peers: string[],     // hex pubkeys, excluding self
+  refreshed_at: ISO8601,
 }
 ```
 
@@ -665,11 +678,11 @@ must include:
 
 ### Calling a peer
 
-> **Phase 1 prerequisite.** The snippet below needs the **custom TS A2A
-> server** (not the bundled Python `a2a_serving`) running on the receiving
-> side, otherwise the multi-turn `Working → InputRequired → Completed`
-> lifecycle won't materialize — the bundled server collapses everything to a
-> single request/response wrapped MCP call.
+> **Phase 1 ✅.** The snippet below uses the **custom TS A2A server**
+> shipped in Phase 1 (not the bundled Python `a2a_serving`). The
+> multi-turn `Working → InputRequired → Completed` lifecycle is live in
+> [`packages/agent/src/a2a/executor.ts`](../packages/agent/src/a2a/executor.ts)
+> with deterministic stub logic; Phase 2 swaps the stub for Claude.
 
 ```typescript
 // MA wants to negotiate a bilateral swap with CA
@@ -774,17 +787,33 @@ gate tests green. Full report in [docs/PHASE1_REPORT.md](./PHASE1_REPORT.md).
 
 ### Phase 2 — Memory + Reasoning + AgentCards (Day 2)
 
-**Purpose:** Agents become actually intelligent, remember things, and have real personas advertised over A2A.
+**Purpose:** Agents become actually intelligent, remember things, and have real personas advertised over A2A. **Builds on the Phase 1 mesh** ([`packages/agent/`](../packages/agent/) is already running — Phase 2 fills in the stubbed `state.ts` (in-memory) with 0G Storage, the deterministic A2A `executor.ts` with Claude-driven logic, and adds new modules for ingestion).
 
-- [ ] `packages/agent/src/memory.ts` — 0G Storage wrapper (KV for state, Log for history). Tested with read-after-write
-- [ ] `packages/agent/src/reason.ts` — Claude API integration with prompt templates per state-agent persona
-- [ ] **AgentCards for the 8 deep states** (MA, CA, TX, NY, FL, IL, WA, AK). Each has a hand-tuned persona, preserved policy stance, and full skills array. These are real artifacts judges (and the frontend) can browse
-- [ ] A2A `AgentExecutor` per agent — implements all 5 skills (`negotiate-bilateral-swap`, `participate-in-coalition`, `bond-auction`, `request-emergency-aid`, `coordinate-shock-response`). Reasoning delegated to Claude
-- [ ] Reflection loop — at end of each tick, agent reviews prior decision and outcome, updates "strategy notes" in 0G Storage
-- [ ] `packages/data-plane` — FRED ingestion for state-level unemployment, GDP, personal income; output normalized JSON keyed by FIPS code
-- [ ] Each agent reads its state's snapshot every tick
+> **Pulled forward from this phase into Phase 1:**
+> - `share_topology` MCP tool + `MeshDiscovery` gossip loop (was a "Phase 2 task" in the original plan; shipped in Phase 1 because the broadcast helper depended on it).
 
-**Deliverable:** Agents make real decisions on real FRED data with persona-driven reasoning, persist to 0G Storage, and AgentCards are discoverable across the mesh. Commit `phase-2-memory-reasoning`.
+#### Memory & reasoning
+
+- [ ] `packages/agent/src/memory.ts` — 0G Storage wrapper (KV for current state, Log for history). Tested with read-after-write. Migrates the data currently in [`state.ts`](../packages/agent/src/state.ts) — `composition`, `reserveRatio`, `receivedIndicators` — into 0G Storage so it survives restart.
+- [ ] `packages/agent/src/reason.ts` — OpenRouter integration (Claude via OpenAI-compatible API; **never `@anthropic-ai/sdk` directly**). Tier by model: `anthropic/claude-opus-4-7` for the 8 deep states, `anthropic/claude-haiku-4-5` for observers.
+- [ ] Replace deterministic `negotiate-bilateral-swap` stub in [`a2a/executor.ts`](../packages/agent/src/a2a/executor.ts) with Claude-driven negotiation (counter-or-accept based on reasoning over treasury state + counterparty's last position).
+- [ ] Implement remaining 4 A2A skills in the same executor: `participate-in-coalition`, `bond-auction`, `request-emergency-aid`, `coordinate-shock-response`. The Phase 1 lifecycle pattern (`Working → InputRequired → Completed`) is the template.
+- [ ] Reflection loop — at end of each tick, agent reviews prior decision and outcome, updates "strategy notes" in 0G Storage.
+
+#### Personas
+
+- [ ] **Per-state AgentCards** for the 8 deep states (MA, CA, TX, NY, FL, IL, WA, AK). Currently [`a2a/card.ts`](../packages/agent/src/a2a/card.ts) generates one template card per FIPS — replace with hand-tuned descriptions/policy stance per state. Cards are real artifacts judges (and the frontend) can browse via `GET /a2a/{peer}` over AXL.
+- [ ] Personality + policy posture as a system prompt in `reason.ts`, fed into every Claude call.
+
+#### Real public data
+
+- [ ] `packages/data-plane/` — FRED ingestion for state-level unemployment, GDP, personal income. Single ingestion service (per the rate-limit table below); output normalized JSON keyed by FIPS code, served at `http://data-plane:3002/snapshot/{fips}`.
+- [ ] Each agent reads its state's snapshot every tick (replaces the `SAMPLE_INDICATORS` stubs in [`tick.ts`](../packages/agent/src/tick.ts)).
+- [ ] Indicator broadcasts in `tick.ts` switch from synthetic values to real FRED-derived numbers.
+
+#### Phase 2 gate
+
+A 5-agent mesh sustains for 1 hour with each agent broadcasting a real FRED-derived indicator each tick, reasoning over a peer's proposal via Claude, persisting decisions to 0G Storage, and AgentCards browsable per state. Commit `phase-2-memory-reasoning`.
 
 ### Phase 3 — Settlement (Day 3)
 
@@ -811,7 +840,7 @@ gate tests green. Full report in [docs/PHASE1_REPORT.md](./PHASE1_REPORT.md).
 - [ ] Algorithmic credit rating logic — meta-process scoring each state on debt-to-revenue, reserve ratio, recent performance. Affects bond auction yields
 - [ ] Coalition formation flow — A2A multi-turn negotiation that converges on a coalition agreement
 - [ ] Aid request → grant flow — distressed state requests aid via MCP, peers respond
-- [ ] Scale local mesh to 10 deep agents + Federal + Treasury (12 containers locally)
+- [ ] Scale local mesh to 10 deep agents + Federal + Treasury (12 Bun processes locally; containerization still deferred to Phase 6) — extend [`scripts/run-local-mesh.sh`](../scripts/run-local-mesh.sh) and [`mesh/configs/`](../mesh/configs/)
 - [ ] Add NOAA event ingestion to data plane
 - [ ] Add GDELT state-tagged news ingestion
 - [ ] First shock injection test: synthetic hurricane in FL, verify catastrophe response flows through mesh
@@ -842,6 +871,7 @@ gate tests green. Full report in [docs/PHASE1_REPORT.md](./PHASE1_REPORT.md).
 
 **Purpose:** Make it real. Public, deployed, sustaining.
 
+- [ ] Containerize: `deploy/docker/agent.Dockerfile` (AXL binary + Python venv for MCP router + Bun runtime + TS code) and `deploy/compose/local-mesh.yml`. **Deferred from Phase 1** — needed now for Fly.io deploy.
 - [ ] Public bootstrap AXL node on Fly.io (publicly reachable for mesh entry)
 - [ ] Deploy 6 deep state-agents to 6 separate Fly.io machines (MA, CA, TX, NY, FL, AK) in different regions for visible geographic peering
 - [ ] Federal + Treasury agents on Fly.io
@@ -1141,8 +1171,9 @@ To prove "intelligence is embedded": the demo includes a step where we transfer 
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| AXL has rough edges, mesh unstable | ~~Medium~~ → Low (Phase 0 cleared) | Phase 0 spikes 00/01/02 all green. Real risks now scoped: must pin `protobuf<6`, must `pip install sse_starlette`, must use same `tcp_port` across nodes — see [Pinned versions and Phase 0 gotchas](#pinned-versions-and-phase-0-gotchas). |
-| Bundled Python A2A server too thin for our skills | Medium | Phase 1 must ship a custom TS A2A server using `@a2a-js/sdk` `DefaultRequestHandler`, point AXL at it via `a2a_addr`. The bundled server is fine for spikes but can't host `Working → InputRequired → Completed` task lifecycles. |
+| AXL has rough edges, mesh unstable | ~~Medium~~ → Low (Phase 0 + Phase 1 cleared) | Phase 0 spikes green; Phase 1 mesh sustaining with all 4 gate tests passing. Pinned-version gotchas captured under [Pinned versions and Phase 0 gotchas](#pinned-versions-and-phase-0-gotchas). |
+| Bundled Python A2A server too thin for our skills | ~~Medium~~ → Resolved (Phase 1 ✅) | Custom TS A2A server shipped — [`packages/agent/src/a2a/server.ts`](../packages/agent/src/a2a/server.ts) hosts the multi-turn `Working → InputRequired → Completed` lifecycle on `Bun.serve` + `@a2a-js/sdk` `JsonRpcTransportHandler`. AXL forwards `a2a_addr` to it. |
+| `/topology.tree` lags for non-hub nodes | ~~Medium~~ → Resolved (Phase 1 ✅) | Yggdrasil's spanning tree is eventually-consistent; non-hub agents under-report the mesh for several minutes. Routing works regardless. Phase 1 layered an `share_topology` MCP tool + `MeshDiscovery` 1-hop gossip loop on top, which converges in ≤10s and bridges the gap without changing AXL. See [`packages/agent/src/discovery.ts`](../packages/agent/src/discovery.ts). |
 | Unichain Sepolia RPC flaky during demo | Medium | Pre-seed pools and balances before demo. Have backup recording of working demo as failsafe. |
 | 0G testnet down during minting | Low-medium | Mint Phase 5, not Phase 7. Have backup of pre-minted iNFT data ready. |
 | Claude rate limits hit on demo | Low | 8 deep agents at 1hr tick is well under limits. Pre-warm caches. |

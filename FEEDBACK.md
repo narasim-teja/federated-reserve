@@ -135,12 +135,14 @@ and labels the friction or delight: `friction:` / `gotcha:` / `delight:` /
   persistently shows only `[CA, MA]` for the first several minutes — TX
   is reachable via routing but not in the topology view. **Routing works
   regardless** (we ran a CA → TX MCP call to completion while CA's tree
-  was still 2 nodes). Application-level discovery should not assume
-  `/topology.tree` is complete; for hackathon timeline we sidestep by
-  having the test harness gather peer pubkeys from the hub. Production
-  agents need a small `share_topology` MCP tool that gossips the full set
-  every few seconds. Worth documenting the convergence behavior in the
-  troubleshooting page.
+  was 2 nodes). Worth documenting the convergence behavior in the AXL
+  troubleshooting page. **Workaround:** we layered a 1-hop MCP gossip
+  protocol on top — every agent exposes a `share_topology` tool returning
+  its known pubkey set, and a periodic discovery loop unions own
+  `/topology` with each direct peer's response. Converges in ≤10s. See
+  [`packages/agent/src/discovery.ts`](packages/agent/src/discovery.ts).
+  This is the pattern other AXL builders will likely need too — would be
+  a nice addition to the AXL "examples" docs page.
 
 - **`gotcha:` (AXL `GET /a2a/{peer}` forwards to `/.well-known/agent-card.json`)** —
   Not the root path. `/Users/narasim/Code/work/federated-reserve/vendor/axl/internal/a2a/a2a_utils.go:13`

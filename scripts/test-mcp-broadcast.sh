@@ -20,32 +20,51 @@ TX_API=http://127.0.0.1:9022
 MA_KEY=$(curl -s "$MA_API/topology" | python3 -c 'import sys,json;print(json.load(sys.stdin)["our_public_key"])')
 TX_KEY=$(curl -s "$TX_API/topology" | python3 -c 'import sys,json;print(json.load(sys.stdin)["our_public_key"])')
 
-# Gather peer pubkeys from the hub (MA), which sees the full mesh, then drop
-# our own (CA's) pubkey so we fan out to *other* states. The Yggdrasil
-# spanning tree at non-hub nodes lags during early lifetime — production
-# discovery needs an MCP `share_topology` gossip tool (Phase 2 task) — but
-# the underlying routing works fine, as the unicast test already proves.
+# Gather CA's discovered peer set via its own share_topology MCP tool.
+# This exercises the production-grade discovery path (1-hop gossip over
+# MCP) — no hub-side cheating. Wait up to 30s for gossip to converge.
 CA_KEY=$(curl -s "$CA_API/topology" | python3 -c 'import sys,json;print(json.load(sys.stdin)["our_public_key"])')
-PEER_KEYS=$(curl -s "$MA_API/topology" | python3 -c "
-import sys,json
-o=json.load(sys.stdin)
-mine='$CA_KEY'
-seen=set()
-for src in (o.get('tree') or []):
-  k=src.get('public_key')
-  if k and k!=mine and k!=o['our_public_key']: seen.add(k)
-for src in (o.get('peers') or []):
-  k=src.get('public_key')
-  if k and k!=mine and k!=o['our_public_key']: seen.add(k)
-# include MA itself (we want CA → {MA, TX})
-seen.add(o['our_public_key'])
-print(' '.join(seen))
-")
+TOPO_REQ='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"share_topology","arguments":{}}}'
+
+PEER_KEYS=""
+DEADLINE=$(( $(date +%s) + 30 ))
+while [[ $(date +%s) -lt $DEADLINE ]]; do
+  RESP=$(curl -sS -X POST "$MA_API/mcp/$CA_KEY/treasurer" \
+    -H "Content-Type: application/json" -d "$TOPO_REQ" 2>/dev/null || echo "")
+  if [[ -n "$RESP" ]]; then
+    INNER=$(echo "$RESP" | python3 -c '
+import json,sys
+try:
+  o=json.load(sys.stdin)
+  text=o.get("result",{}).get("content",[{}])[0].get("text","")
+  print(text)
+except Exception:
+  print("")
+')
+    if [[ -n "$INNER" ]]; then
+      CANDIDATE=$(echo "$INNER" | python3 -c '
+import json,sys
+try:
+  o=json.load(sys.stdin)
+  print(" ".join(o.get("peers", [])))
+except Exception:
+  pass
+')
+      n=$(echo "$CANDIDATE" | wc -w | tr -d ' ')
+      if [[ "$n" -ge 2 ]]; then
+        PEER_KEYS="$CANDIDATE"
+        break
+      fi
+    fi
+  fi
+  sleep 2
+done
 
 if [[ -z "$PEER_KEYS" ]]; then
-  echo "[test-broadcast] ✗ CA has no peers"
+  echo "[test-broadcast] ✗ CA's discovery never converged to ≥2 peers within 30s"
   exit 1
 fi
+echo "[test-broadcast] CA discovered $(echo "$PEER_KEYS" | wc -w | tr -d ' ') peer(s) via gossip"
 
 # Marker so we can grep the logs deterministically — random per run.
 MARKER="phase1-bcast-$(date +%s)-$RANDOM"

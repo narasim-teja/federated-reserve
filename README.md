@@ -22,8 +22,11 @@ plan: [docs/TECHNICAL.md](./docs/TECHNICAL.md).
 the protocol stack end-to-end:
 
 - MCP unicast — `query_treasury` peer→peer over AXL
-- App-level broadcast — `share_economic_indicator` fanned out to all peers
-  (AXL has no native pubsub; we fan out at the application layer over MCP)
+- MCP gossip discovery — `share_topology` tool + 1-hop refresh loop
+  bridges Yggdrasil's spanning-tree lag; converges in ≤10s
+- App-level broadcast — `share_economic_indicator` fanned out to all
+  peers via the discovery view (AXL has no native pubsub; we fan out at
+  the application layer over MCP)
 - A2A multi-turn — `negotiate-bilateral-swap` task lifecycle
   `Working → InputRequired → Completed` over a custom TS A2A server built
   on `@a2a-js/sdk` (replaces the bundled Python `a2a_serving` which is
@@ -103,8 +106,9 @@ Subsequent Phase 0 spikes (`03`-`06`) need credentials/funded wallets — see
 # Boot 3 AXL nodes + 3 MCP routers + 3 agents (MA, CA, TX) in the foreground
 ./scripts/run-local-mesh.sh
 
-# In a second terminal, run the three Phase 1 gate tests:
+# In a second terminal, run the four Phase 1 gate tests:
 ./scripts/test-mcp-unicast.sh        # CA → MA query_treasury
+./scripts/test-mcp-discovery.sh      # CA's gossip view converges to {MA, TX}
 ./scripts/test-mcp-broadcast.sh      # CA → {MA,TX} share_economic_indicator
 ./scripts/test-a2a-negotiate.sh      # CA ↔ MA negotiate-bilateral-swap
 

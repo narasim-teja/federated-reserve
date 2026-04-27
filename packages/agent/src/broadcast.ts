@@ -3,9 +3,13 @@
  *
  * AXL's HTTP surface is `/topology`, `/send`, `/recv`, `/mcp/`, `/a2a/` —
  * there is no native pubsub primitive. To "broadcast" something, we call
- * `/topology` to enumerate peers and fan the same MCP `tools/call` out to
- * each one. Cost is O(N) per broadcast, which is fine for a 50-node mesh
- * with quarter-hourly tick semantics.
+ * the same MCP `tools/call` against every peer in the discovered mesh.
+ * Cost is O(N) per broadcast, which is fine for a 50-node mesh with
+ * quarter-hourly tick semantics.
+ *
+ * Peer discovery comes from `MeshDiscovery` (1-hop MCP gossip), not raw
+ * `axl.peerPubkeys()` — the latter under-reports for non-hub nodes
+ * because Yggdrasil's spanning tree converges asynchronously.
  *
  * If a peer is unreachable, we log and continue — broadcast is best-effort,
  * the receiver will pull the indicator next tick if it cares.
@@ -15,6 +19,7 @@ import { TREASURER_SERVICE_NAME, type ShareEconomicIndicatorInput } from '@feder
 import { MCP_TOOLS } from '@federated-reserve/shared';
 import type { AgentConfig } from './config.ts';
 import type { AxlClient } from './axl-client.ts';
+import type { MeshDiscovery } from './discovery.ts';
 
 let broadcastSeq = 1;
 
@@ -27,9 +32,10 @@ export interface BroadcastResult {
 export async function broadcastIndicator(
   cfg: AgentConfig,
   axl: AxlClient,
+  discovery: MeshDiscovery,
   input: ShareEconomicIndicatorInput,
 ): Promise<BroadcastResult[]> {
-  const peers = await axl.peerPubkeys();
+  const peers = discovery.knownPeers();
   if (peers.length === 0) {
     console.log(`[${cfg.state.abbr}] no peers to broadcast to (yet)`);
     return [];

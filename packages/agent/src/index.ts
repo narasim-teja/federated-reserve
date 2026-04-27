@@ -16,6 +16,7 @@
 import { describeAgent, loadConfig } from './config.ts';
 import { AxlClient } from './axl-client.ts';
 import { McpRouterClient } from './mcp-router-client.ts';
+import { MeshDiscovery } from './discovery.ts';
 import { makeMcpRequestHandler } from './mcp/server.ts';
 import { startA2aServer } from './a2a/server.ts';
 import { makeInitialState } from './state.ts';
@@ -25,6 +26,7 @@ const cfg = loadConfig();
 const state = makeInitialState(cfg.state.fips);
 const axl = new AxlClient(cfg.axl.apiUrl);
 const router = new McpRouterClient(cfg.mcp.routerUrl);
+const discovery = new MeshDiscovery(cfg, axl);
 
 console.log(`[${cfg.state.abbr}] starting agent: ${describeAgent(cfg)}`);
 console.log(
@@ -46,7 +48,7 @@ await router.waitReady();
 console.log(`[${cfg.state.abbr}]   MCP Router ready`);
 
 // 3. Start MCP server.
-const handleMcp = makeMcpRequestHandler(cfg, state);
+const handleMcp = makeMcpRequestHandler({ cfg, state, axl, discovery });
 const mcpServer = Bun.serve({
   port: cfg.mcp.serverPort,
   hostname: '127.0.0.1',
@@ -70,8 +72,13 @@ console.log(
 // 5. Start A2A server.
 const a2a = startA2aServer(cfg, state);
 
-// 6. Start tick loop.
-const tick = startTickLoop(cfg, axl);
+// 6. Start the gossip discovery loop. First refresh fires in 2s (after our
+//    own MCP server is up so peers querying us back get a real response);
+//    subsequent refreshes every 10s. Phase 2 may dial this up/down.
+discovery.start(10_000);
+
+// 7. Start tick loop.
+const tick = startTickLoop(cfg, axl, discovery);
 
 console.log(`[${cfg.state.abbr}] ✓ agent ready`);
 
@@ -83,6 +90,7 @@ async function shutdown(sig: string): Promise<void> {
   shuttingDown = true;
   console.log(`[${cfg.state.abbr}] received ${sig}, shutting down...`);
   tick.stop();
+  discovery.stop();
   a2a.stop();
   await router.deregister(cfg.mcp.serviceName);
   mcpServer.stop();

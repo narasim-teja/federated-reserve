@@ -66,11 +66,38 @@ export const shareEconomicIndicatorResultSchema = z.object({
 });
 export type ShareEconomicIndicatorResult = z.infer<typeof shareEconomicIndicatorResultSchema>;
 
+// ---------- share_topology ---------------------------------------------------
+
+/**
+ * Returns this agent's current view of the mesh — the set of peer pubkeys
+ * it has discovered so far, including indirect peers learned via gossip.
+ *
+ * Why this exists: AXL's `/topology.tree` field propagates eventually-
+ * consistently and under-reports for non-hub nodes (a leaf may not see its
+ * sibling for several minutes even though routing works fine). So agents
+ * gossip their views over MCP. After 1-2 refresh rounds, every agent
+ * converges on the full mesh.
+ */
+export const shareTopologyInputSchema = z.object({
+  // Empty by design — caller wants whatever this peer currently knows.
+}).strict();
+export type ShareTopologyInput = z.infer<typeof shareTopologyInputSchema>;
+
+export const shareTopologyResultSchema = z.object({
+  responder_pubkey: z.string(),
+  /** Hex-encoded ed25519 public keys, excluding the responder's own. */
+  peers: z.array(z.string()),
+  /** ISO-8601 timestamp of when this view was last refreshed. */
+  refreshed_at: z.string(),
+});
+export type ShareTopologyResult = z.infer<typeof shareTopologyResultSchema>;
+
 // ---------- MCP tool name registry ------------------------------------------
 
 export const MCP_TOOLS = {
   QUERY_TREASURY: 'query_treasury',
   SHARE_ECONOMIC_INDICATOR: 'share_economic_indicator',
+  SHARE_TOPOLOGY: 'share_topology',
 } as const;
 
 export type McpToolName = (typeof MCP_TOOLS)[keyof typeof MCP_TOOLS];

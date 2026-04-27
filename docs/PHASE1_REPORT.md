@@ -6,20 +6,28 @@
 ## TL;DR
 
 **Three-agent mesh works end-to-end.** The Bun/TypeScript agent runtime
-runs alongside one AXL node and one Python MCP Router per host, and the
-three Phase 1 gate tests are green:
+runs alongside one AXL node and one Python MCP Router per host, and all
+four Phase 1 gate tests are green:
 
 | # | Test | What it proves | Result |
 |---|---|---|---|
 | 1 | MCP unicast — CA → MA `query_treasury` | Spike-01 lifted into the real mesh: peer-to-peer single-shot tool calls work over AXL transport | ✅ |
-| 2 | App-level broadcast — CA → {MA, TX} `share_economic_indicator` | Fan-out across the mesh; both receivers logged the indicator | ✅ |
-| 3 | A2A multi-turn — CA ↔ MA `negotiate-bilateral-swap` | `Working → InputRequired → Working → Completed` lifecycle round-trips through our **custom TS A2A server** built on `@a2a-js/sdk` (the bundled Python A2A is single-shot and could not host this) | ✅ |
+| 2 | Gossip discovery — CA's `share_topology` converges to all peers | 1-hop MCP gossip closes the gap left by Yggdrasil's lagging `/topology.tree`. CA learns about TX (its sibling) without going through the hub. | ✅ |
+| 3 | App-level broadcast — CA → {MA, TX} `share_economic_indicator` | Fan-out across the mesh using the discovery view (no hub-side cheating); both receivers logged the indicator | ✅ |
+| 4 | A2A multi-turn — CA ↔ MA `negotiate-bilateral-swap` | `Working → InputRequired → Working → Completed` lifecycle round-trips through our **custom TS A2A server** built on `@a2a-js/sdk` (the bundled Python A2A is single-shot and could not host this) | ✅ |
 
-The big architectural delivery: the **custom TS A2A server** that
-TECHNICAL.md flagged as the Phase 1 must-ship is live. From here on, every
-multi-turn skill (`participate-in-coalition`, `bond-auction`,
-`request-emergency-aid`, `coordinate-shock-response`) plugs into the same
-`AgentExecutor` pattern.
+Two architectural deliveries:
+
+1. **Custom TS A2A server** — replaces the bundled Python `a2a_serving`,
+   hosts the multi-turn task lifecycle. From here on, every multi-turn
+   skill (`participate-in-coalition`, `bond-auction`,
+   `request-emergency-aid`, `coordinate-shock-response`) plugs into the
+   same `AgentExecutor` pattern.
+2. **MCP gossip discovery** — `packages/agent/src/discovery.ts` runs a
+   periodic 1-hop gossip refresh: each agent unions its own `/topology`
+   with the result of calling `share_topology` on every direct peer.
+   After 1-2 rounds (≤10s) the mesh converges. Production-grade and
+   doesn't depend on Yggdrasil's spanning tree being in steady state.
 
 ## What landed on disk
 
@@ -36,7 +44,8 @@ federated-reserve/
 │           ├── state.ts            # in-memory treasury (Phase 2 swaps for 0G Storage)
 │           ├── axl-client.ts       # /topology, /send, /recv, /mcp/, /a2a/ wrapper
 │           ├── mcp-router-client.ts# Python MCP Router register/deregister
-│           ├── broadcast.ts        # app-level fan-out helper
+│           ├── discovery.ts        # 1-hop MCP gossip — bridges /topology.tree lag
+│           ├── broadcast.ts        # app-level fan-out helper (uses discovery)
 │           ├── tick.ts             # heartbeat + periodic indicator broadcast
 │           ├── mcp/server.ts       # factory-pattern MCP server (Bun.serve)
 │           └── a2a/
@@ -47,8 +56,9 @@ federated-reserve/
 └── scripts/
     ├── run-local-mesh.sh           # boots 3 AXL + 3 MCP routers + 3 agents
     ├── test-mcp-unicast.sh         # gate 1
-    ├── test-mcp-broadcast.sh       # gate 2
-    └── test-a2a-negotiate.sh       # gate 3
+    ├── test-mcp-discovery.sh       # gate 2 — gossip convergence
+    ├── test-mcp-broadcast.sh       # gate 3
+    └── test-a2a-negotiate.sh       # gate 4
 ```
 
 ## Topology
@@ -106,19 +116,27 @@ This is captured in [`packages/agent/src/broadcast.ts`](../packages/agent/src/br
 the tick loop uses it to emit periodic indicator broadcasts so the mesh
 has steady traffic during demo.
 
-### Yggdrasil spanning-tree convergence is asymmetric (informational)
+### MCP gossip discovery closes the `/topology.tree` gap
 
-The non-listener agents' `/topology.tree` field under-reports during early
-lifetime — we observed CA's tree showing only 2 nodes (CA + MA) after a
-minute of uptime, even though TX was reachable and MCP/A2A calls
-CA → TX succeeded. The hub (MA) sees all 3 immediately. **Underlying
-routing works regardless** — we proved this by running a CA → TX MCP call
-to completion while CA's tree was still reporting 2 nodes.
+Yggdrasil's spanning tree is eventually-consistent: the non-listener
+agents' `/topology.tree` field under-reports during early lifetime —
+e.g. CA's tree showed `[CA, MA]` for several minutes despite TX being
+fully reachable. **Underlying routing works regardless** (we proved this
+by running a CA → TX MCP call to completion while CA's tree was 2 nodes).
 
-For Phase 1 the broadcast test gathers peer pubkeys from MA (the
-well-connected hub) for determinism. **Production-grade discovery needs
-an MCP `share_topology` gossip tool** — Phase 2 task. This is not a
-correctness bug, it's a discovery-completeness gap.
+We pulled the production-grade fix into Phase 1 instead of deferring to
+Phase 2: every agent registers a [`share_topology` MCP tool](../packages/shared/src/mcp-schemas.ts)
+and runs a periodic [`MeshDiscovery`](../packages/agent/src/discovery.ts)
+loop — every 10s it unions its own `/topology` with the result of calling
+`share_topology` on each direct peer (1-hop gossip). After 1-2 rounds CA
+sees all peers. The [`broadcast`](../packages/agent/src/broadcast.ts)
+helper now reads from `discovery.knownPeers()` instead of raw
+`axl.peerPubkeys()` — making the broadcast pattern correct end-to-end
+without depending on the spanning-tree being in steady state.
+
+Test 2 (`test-mcp-discovery.sh`) explicitly verifies this convergence by
+calling `share_topology` on CA and asserting the response includes both
+MA and TX.
 
 ## Phase 1 deliverables vs TECHNICAL.md checklist
 
@@ -131,7 +149,8 @@ correctness bug, it's a discovery-completeness gap.
 | Custom TS A2A server using `@a2a-js/sdk` `DefaultRequestHandler` | ✅ |
 | Dockerfile per agent + `deploy/compose/local-mesh.yml` | ⏸ deferred to Phase 6 packaging — Phase 1 confirmed the topology with bare Bun processes; containerization is a packaging concern, not a correctness concern |
 | 3-agent local mesh | ✅ (`scripts/run-local-mesh.sh`) |
-| MCP test: 3 agents broadcast `share_economic_indicator`, all 3 receive | ✅ via `test-mcp-broadcast.sh` |
+| MCP gossip discovery (originally a Phase 2 task) | ✅ via `test-mcp-discovery.sh` — pulled forward because broadcast correctness depends on it |
+| MCP test: 3 agents broadcast `share_economic_indicator`, all 3 receive | ✅ via `test-mcp-broadcast.sh` (uses discovery view, no hub-side cheating) |
 | MCP test: agent A calls `query_treasury` on agent B | ✅ via `test-mcp-unicast.sh` |
 | A2A test: `negotiate-bilateral-swap` with InputRequired round-trip and Completed terminal | ✅ via `test-a2a-negotiate.sh` |
 
@@ -160,4 +179,3 @@ Phase 2 (Memory + Reasoning + AgentCards) builds on:
 - The `negotiate-bilateral-swap` deterministic stub becomes Claude-driven
 - AgentCards get hand-tuned per-state personas (currently all use one template)
 - FRED ingestion in `packages/data-plane`
-- A `share_topology` MCP tool to fix the discovery gap noted above

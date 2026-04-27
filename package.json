@@ -14,6 +14,7 @@
     "mesh:start": "./scripts/run-local-mesh.sh",
     "mesh:stop": "./scripts/run-local-mesh.sh stop",
     "test:unicast": "./scripts/test-mcp-unicast.sh",
+    "test:discovery": "./scripts/test-mcp-discovery.sh",
     "test:broadcast": "./scripts/test-mcp-broadcast.sh",
     "test:a2a": "./scripts/test-a2a-negotiate.sh"
   },

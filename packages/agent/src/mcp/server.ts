@@ -17,14 +17,27 @@ import {
   MCP_TOOLS,
   queryTreasuryInputSchema,
   shareEconomicIndicatorInputSchema,
+  shareTopologyInputSchema,
   type QueryTreasuryResult,
   type ShareEconomicIndicatorResult,
+  type ShareTopologyResult,
 } from '@federated-reserve/shared';
 import { lookupStateByFips } from '@federated-reserve/shared';
 import type { AgentConfig } from '../config.ts';
+import type { AxlClient } from '../axl-client.ts';
+import type { MeshDiscovery } from '../discovery.ts';
 import type { AgentState } from '../state.ts';
 
-function registerTools(mcp: McpServer, cfg: AgentConfig, state: AgentState): void {
+interface ServerDeps {
+  cfg: AgentConfig;
+  state: AgentState;
+  axl: AxlClient;
+  discovery: MeshDiscovery;
+}
+
+function registerTools(mcp: McpServer, deps: ServerDeps): void {
+  const { cfg, state, axl, discovery } = deps;
+  void axl;
   // ---- query_treasury ------------------------------------------------------
   mcp.registerTool(
     MCP_TOOLS.QUERY_TREASURY,
@@ -81,6 +94,36 @@ function registerTools(mcp: McpServer, cfg: AgentConfig, state: AgentState): voi
       };
     },
   );
+
+  // ---- share_topology ------------------------------------------------------
+  mcp.registerTool(
+    MCP_TOOLS.SHARE_TOPOLOGY,
+    {
+      title: 'Share known mesh topology',
+      description:
+        "Returns this agent's current view of the mesh — pubkeys it has discovered via /topology + 1-hop gossip from direct peers.",
+      inputSchema: shareTopologyInputSchema.shape,
+    },
+    async () => {
+      // Bootstrap responder pubkey lazily from /topology so we always
+      // return the canonical value.
+      let responderPubkey = '';
+      try {
+        const top = await axl.topology();
+        responderPubkey = top.our_public_key;
+      } catch {
+        responderPubkey = '';
+      }
+      const result: ShareTopologyResult = {
+        responder_pubkey: responderPubkey,
+        peers: discovery.knownPeers(),
+        refreshed_at: discovery.lastRefreshAt() ?? new Date(0).toISOString(),
+      };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result) }],
+      };
+    },
+  );
 }
 
 /**
@@ -88,13 +131,14 @@ function registerTools(mcp: McpServer, cfg: AgentConfig, state: AgentState): voi
  * Returns a `(req: Request) => Promise<Response>` so the MCP listener can be
  * mounted at any path (we use `/mcp`).
  */
-export function makeMcpRequestHandler(cfg: AgentConfig, state: AgentState) {
+export function makeMcpRequestHandler(deps: ServerDeps) {
+  const { cfg } = deps;
   return async (req: Request): Promise<Response> => {
     const mcp = new McpServer(
       { name: `${cfg.state.abbr.toLowerCase()}-treasurer`, version: '0.1.0' },
       { capabilities: { tools: {} } },
     );
-    registerTools(mcp, cfg, state);
+    registerTools(mcp, deps);
 
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless
