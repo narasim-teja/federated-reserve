@@ -18,9 +18,19 @@ plan: [docs/TECHNICAL.md](./docs/TECHNICAL.md).
 
 ## Status
 
-**Phase 0 complete** (2026-04-27). All AXL/MCP/A2A spikes green; data &
-chain spikes scaffolded and waiting on credentials and funded wallets.
-See [docs/PHASE0_REPORT.md](./docs/PHASE0_REPORT.md).
+**Phase 1 complete** (2026-04-27). 3-agent local mesh (MA/CA/TX) running
+the protocol stack end-to-end:
+
+- MCP unicast — `query_treasury` peer→peer over AXL
+- App-level broadcast — `share_economic_indicator` fanned out to all peers
+  (AXL has no native pubsub; we fan out at the application layer over MCP)
+- A2A multi-turn — `negotiate-bilateral-swap` task lifecycle
+  `Working → InputRequired → Completed` over a custom TS A2A server built
+  on `@a2a-js/sdk` (replaces the bundled Python `a2a_serving` which is
+  single-shot only)
+
+See [docs/PHASE1_REPORT.md](./docs/PHASE1_REPORT.md). Phase 0 outcomes in
+[docs/PHASE0_REPORT.md](./docs/PHASE0_REPORT.md).
 
 ## Repo layout
 
@@ -35,8 +45,15 @@ federated-reserve/
 ├── scripts/derive-wallets.sh Re-derives the agent wallet hierarchy
 ├── spikes/                  Phase 0 dependency spikes (00 through 06)
 ├── FEEDBACK.md              Builder-experience notes (Uniswap track requirement)
-├── packages/                (Phase 1+) — Bun/TS workspace for agents, data plane,
-│                            observer, frontend
+├── packages/                Bun/TS workspace
+│   ├── shared/              State metadata, MCP Zod schemas, A2A skill types
+│   └── agent/               Per-agent runtime (MCP server + A2A server + tick loop)
+├── mesh/configs/            AXL node configs for the local 3-agent mesh
+├── scripts/                 Mesh runner + Phase 1 test harness
+│   ├── run-local-mesh.sh    boots 3 AXL + 3 MCP routers + 3 agents
+│   ├── test-mcp-unicast.sh
+│   ├── test-mcp-broadcast.sh
+│   └── test-a2a-negotiate.sh
 ├── contracts/               (Phase 3+) — Foundry project for StateToken,
 │                            BondToken, ERC-7857 iNFTs
 └── deploy/                  (Phase 6+) — Docker / Fly.io configs
@@ -68,14 +85,33 @@ cp .env.example .env.local
 # and a fresh BIP-39 mnemonic for MASTER_SEED. Then:
 ./scripts/derive-wallets.sh >> .env.local   # populates the WALLET_*_ADDRESS / _PRIVATE_KEY block
 
-# 6. Verify the foundation (Phase 0 spikes)
+# 6. Workspace install
+bun install
+
+# 7. Verify the foundation (Phase 0 spikes)
 ./spikes/00-axl-nodes/run.sh
 ./spikes/01-axl-mcp/run.sh
 ./spikes/02-axl-a2a/run.sh
 ```
 
-Subsequent spikes (`03`-`06`) need credentials/funded wallets — see
+Subsequent Phase 0 spikes (`03`-`06`) need credentials/funded wallets — see
 [docs/PHASE0_REPORT.md](./docs/PHASE0_REPORT.md#whats-needed-to-take-spikes-3-6-from-skip-to-pass).
+
+## Running the Phase 1 mesh
+
+```bash
+# Boot 3 AXL nodes + 3 MCP routers + 3 agents (MA, CA, TX) in the foreground
+./scripts/run-local-mesh.sh
+
+# In a second terminal, run the three Phase 1 gate tests:
+./scripts/test-mcp-unicast.sh        # CA → MA query_treasury
+./scripts/test-mcp-broadcast.sh      # CA → {MA,TX} share_economic_indicator
+./scripts/test-a2a-negotiate.sh      # CA ↔ MA negotiate-bilateral-swap
+
+# When done, Ctrl+C the mesh (or in a new terminal: ./scripts/run-local-mesh.sh stop)
+```
+
+Logs land in `/tmp/federated-reserve/{axl,router,agent}-*.log`.
 
 ## Three hackathon tracks
 

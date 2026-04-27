@@ -1,0 +1,25 @@
+{
+  "name": "federated-reserve",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "typecheck": "bun run --filter '*' typecheck",
+    "mesh:start": "./scripts/run-local-mesh.sh",
+    "mesh:stop": "./scripts/run-local-mesh.sh stop",
+    "test:unicast": "./scripts/test-mcp-unicast.sh",
+    "test:broadcast": "./scripts/test-mcp-broadcast.sh",
+    "test:a2a": "./scripts/test-a2a-negotiate.sh"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}

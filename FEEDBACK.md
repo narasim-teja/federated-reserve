@@ -113,6 +113,54 @@ and labels the friction or delight: `friction:` / `gotcha:` / `delight:` /
   `result.task.artifacts[0].parts[0].text`. Worth documenting at
   https://docs.gensyn.ai/tech/agent-exchange-layer/integrations#a2a-server.
 
+## 2026-04-27 — Phase 1 mesh foundation
+
+### AXL
+
+- **`docs-gap:` (no native pubsub primitive)** — TECHNICAL.md drafts and
+  generic agent-mesh literature talk about "GossipSub" topics for fan-out
+  broadcasts. AXL doesn't ship that. The HTTP surface is `/topology`,
+  `/send`, `/recv`, `/mcp/{peer}/{svc}`, `/a2a/{peer}` — full stop. To
+  broadcast at the application layer we walk the peer set from `/topology`
+  and call the same MCP tool on every peer in turn. This works fine
+  semantically and cost is acceptable at our scale (~50 peers × 1hr
+  ticks), but it's worth saying so up front in the AXL docs to set
+  expectations: "AXL is unicast + envelope; pubsub is your application's
+  job."
+
+- **`gotcha:` (`/topology.tree` lags `/topology.peers` asymmetrically)** —
+  Yggdrasil's spanning tree updates propagate eventually-consistently. In
+  a 3-node mesh with a hub (MA) and two leaf nodes (CA, TX dialing into
+  MA), MA's `tree` shows all 3 nodes immediately, but CA's `tree`
+  persistently shows only `[CA, MA]` for the first several minutes — TX
+  is reachable via routing but not in the topology view. **Routing works
+  regardless** (we ran a CA → TX MCP call to completion while CA's tree
+  was still 2 nodes). Application-level discovery should not assume
+  `/topology.tree` is complete; for hackathon timeline we sidestep by
+  having the test harness gather peer pubkeys from the hub. Production
+  agents need a small `share_topology` MCP tool that gossips the full set
+  every few seconds. Worth documenting the convergence behavior in the
+  troubleshooting page.
+
+- **`gotcha:` (AXL `GET /a2a/{peer}` forwards to `/.well-known/agent-card.json`)** —
+  Not the root path. `/Users/narasim/Code/work/federated-reserve/vendor/axl/internal/a2a/a2a_utils.go:13`
+  hardcodes the path. POST goes to root. A custom TS A2A server (mounted
+  on `Bun.serve`) needs to handle both. Documented in a few places in the
+  AXL repo but easy to miss when implementing a non-Python A2A server.
+
+- **`delight:` (`@a2a-js/sdk` `JsonRpcTransportHandler` is a clean
+  drop-in)** — `new JsonRpcTransportHandler(new DefaultRequestHandler(card,
+  store, executor))` plus a Bun.serve `fetch` handler is ~80 lines for
+  a working A2A server with the full v0.3.0 lifecycle, including
+  multi-turn tasks (`Working → InputRequired → Completed`). Replacing the
+  bundled Python `a2a_serving.a2a_server` was straightforward.
+
+- **`gotcha:` (Bun runs `.ts` directly without type stripping)** — A
+  `declare const _x: SomeType; void _x;` trick to force-keep an unused
+  type import compiles fine but throws `ReferenceError: _x is not defined`
+  at runtime. Bun executes the TS source as-is. Just import the type
+  where you use it.
+
 ### Uniswap
 
 _(placeholder — Spike 03 will populate this when we hit the Trading API)_

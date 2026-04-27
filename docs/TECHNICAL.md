@@ -17,7 +17,7 @@
 | Settlement | Uniswap Trading API + Unichain Sepolia | Real onchain swap execution |
 | Memory / Storage | 0G Storage SDK (`@0glabs/0g-ts-sdk`) | Agent persistent memory (KV + Log) |
 | Identity / Ownership | 0G Chain + ERC-7857 | iNFT contracts representing agent ownership |
-| Reasoning | Anthropic Claude API | Agent decision-making (deep agents) + lightweight model for observers |
+| Reasoning | OpenRouter (Claude via OpenAI-compatible API) | Agent decision-making (deep agents) + lightweight model for observers. **Never use the Anthropic SDK directly** — all LLM calls route through `OPENROUTER_API_KEY`. |
 | Frontend | Next.js 15 (App Router) + shadcn/ui + Tailwind | Live ops dashboard |
 | Map / Viz | deck.gl + MapLibre GL | US state map, capital flow arcs |
 | Backend (frontend's) | Bun + Hono | WebSocket gateway from observer AXL node to frontend |
@@ -39,7 +39,9 @@
 
 ### AXL (Primary track)
 
-**What it is:** Peer-to-peer network node, single binary. Runs on each agent's machine. Exposes `localhost:9002` HTTP bridge. Handles encryption (TLS + Yggdrasil), routing, peer discovery. Built-in MCP and A2A support. Userspace, runs behind NATs without port forwarding (except for at least one bootstrap node which must be publicly reachable).
+**What it is:** Peer-to-peer network node, single Go binary. Runs on each agent's machine. Exposes `localhost:9002` HTTP bridge. Handles encryption (TLS + Yggdrasil), routing, peer discovery. Userspace, runs behind NATs without port forwarding (except for at least one bootstrap node which must be publicly reachable).
+
+> **Phase 0 finding — "MCP/A2A support" is *not* in-process.** AXL's `/mcp/{peer_id}/{service}` and `/a2a/{peer_id}` endpoints are bridges that forward inbound JSON-RPC to **separate local services** configured via `router_addr` (default `:9003`) and `a2a_addr` (default `:9004`). The reference implementations are Python (`vendor/axl/integrations/mcp_routing/` and `a2a_serving/`). Our TypeScript MCP servers self-register with the Python MCP Router via `POST :9003/register {service, endpoint}`. The bundled A2A server auto-derives skills from registered MCP services as request/response wrappers — **it cannot host the rich multi-turn A2A task lifecycles** described later in this doc. Phase 1 must include a custom TypeScript A2A server using `@a2a-js/sdk` that AXL forwards to via `a2a_addr` instead.
 
 **Docs:** https://docs.gensyn.ai/tech/agent-exchange-layer
 **Get started:** https://docs.gensyn.ai/tech/agent-exchange-layer/get-started
@@ -49,8 +51,8 @@
 **How we use it:**
 - Each agent process runs an AXL node alongside it. Agent talks to its local AXL via HTTP on `localhost:9002`.
 - AXL is the **transport binding** under MCP and A2A. Calling a remote agent's MCP tool is `POST localhost:9002/mcp/{peer_id}/{service}`. Calling a remote A2A skill is `POST localhost:9002/a2a/{peer_id}`. AXL wraps the JSON-RPC body in a transport envelope, routes it over Yggdrasil, and unwraps the response. The application sees a normal JSON-RPC response.
-- **GossipSub** for broadcasts where every peer should hear (Fed rate announcements, shock events, economic indicator updates).
-- **Convergecast** for tree-aggregated reporting (Federal agent collecting aggregate state metrics over the spanning tree).
+- **Application-level fan-out** for broadcasts where every peer should hear (Fed rate announcements, shock events, economic indicator updates). **AXL does not ship a native pubsub primitive** — its HTTP surface is `/topology`, `/send`, `/recv`, `/mcp/`, `/a2a/`. Phase 1 broadcasts are implemented as O(N) MCP fan-outs over `/mcp/{peer}/treasurer` against the discovered peer set. (Earlier drafts of this doc framed this as "GossipSub"; that's aspirational vocabulary, not an AXL feature.)
+- **Convergecast** for tree-aggregated reporting (Federal agent collecting aggregate state metrics over the spanning tree). Built on the same fan-out + MCP `tools/call` mechanism, with the Federal agent acting as the aggregation root.
 
 **Qualification compliance:**
 - ✅ Uses AXL for inter-agent communication (no central message broker — every MCP call and A2A skill invocation routes through AXL)
@@ -213,53 +215,95 @@ OG_STORAGE_URL="https://storage-testnet.0g.ai"
 
 ### Per-agent process
 
+Validated in Phase 0. An "agent" is **four cooperating processes on the same
+host (or container)**, wired together by AXL's `router_addr`/`a2a_addr` config.
+
+> **This is still fully P2P.** The "no central broker" qualification refers
+> to *inter-agent* communication. Each agent's MCP Router and A2A server are
+> per-host sidecars in the same trust boundary as that agent's AXL node —
+> Agent MA's router on Fly machine `bos` has zero awareness of Agent CA's
+> router on Fly machine `sjc`. Nothing about this architecture routes one
+> agent's messages through another agent's (or any third party's)
+> infrastructure. The wire from MA → CA goes:
+> `MA process → MA's local AXL → Yggdrasil mesh → CA's local AXL → CA's
+> local router → CA's MCP server`. No central hop, no shared backend.
+
 ```
-┌─ Agent process (Bun) ─────────────────────────────┐
-│                                                    │
-│  Tick loop (1hr real = 1 quarter sim)              │
-│   ↓                                                │
-│  1. Fetch state snapshot from data plane           │
-│  2. Read own memory from 0G Storage (KV)           │
-│  3. Listen to AXL inbox (MCP server endpoint)      │
-│  4. Reason via Claude API                          │
-│  5. Take actions:                                  │
-│     - Broadcast updates (GossipSub via AXL)        │
-│     - Send proposals (MCP/A2A via AXL)             │
-│     - Execute swaps (Uniswap Trading API)          │
-│  6. Reflect on prior tick outcomes                 │
-│  7. Persist to 0G Storage (KV update + Log append) │
-│                                                    │
-│  Concurrent: AXL MCP server (handles inbound       │
-│  tool calls from peer agents)                      │
-│                                                    │
-└────────────┬───────────────────────────────────────┘
-             │ HTTP localhost:9002
+┌─ Agent process (Bun) ─────────────────────────────┐  ┌─ MCP Router ─────────┐
+│                                                    │  │ (Python integrations)│
+│  Tick loop (1hr real = 1 quarter sim)              │  │ port :9003           │
+│   ↓                                                │  │  POST /register      │
+│  1. Fetch state snapshot from data plane           │  │  POST /route         │
+│  2. Read own memory from 0G Storage (KV)           │  └─────────▲────────────┘
+│  3. Reason via OpenRouter (Claude / cheaper model) │            │
+│  4. Take actions:                                  │  ┌─────────┴────────────┐
+│     - Broadcast updates (app-level MCP fan-out)    │  │ Custom TS A2A server │
+│     - Send MCP calls  (POST :9002/mcp/{peer}/...)  │  │ (Phase 1 deliverable;│
+│     - Send A2A skills (POST :9002/a2a/{peer})      │  │  uses @a2a-js/sdk)   │
+│     - Execute swaps (Uniswap Trading API)          │  │ port :9004           │
+│  5. Reflect on prior tick outcomes                 │  └─────────▲────────────┘
+│  6. Persist to 0G Storage (KV update + Log append) │            │
+│                                                    │            │
+│  Concurrent: TS MCP server (Bun.serve + MCP SDK    │            │
+│  WebStandardStreamableHTTPServerTransport, port    │            │
+│  :7100; registers with router on startup)          │            │
+│                                                    │            │
+└────────────┬───────────────────────────────────────┘            │
+             │ inbound MCP/A2A JSON-RPC                            │
+             │ HTTP localhost:9002 ──── router_addr/a2a_addr ──────┘
 ┌────────────┴───────────────────────────────────────┐
-│  AXL node binary (single binary, no root)          │
-│  - peer discovery, encryption, routing             │
+│  AXL node binary (Go, single binary, no root)      │
+│  - peer discovery (Yggdrasil), encryption, routing │
+│  - bridges /mcp /a2a to local router/A2A servers   │
 └────────────────────────────────────────────────────┘
 ```
 
+**Startup ordering matters** (Phase 0 spike-02 finding): AXL node → MCP
+router → MCP server → A2A server → caller. The A2A server fetches `/topology`
+from AXL synchronously on startup to learn its own peer ID.
+
 ### Repository layout
+
+> Phase 0 added the `vendor/`, `.venv/`, `.keys/`, `spikes/`, and
+> `scripts/derive-wallets.sh` entries below. `docs/PHASE0_REPORT.md` is the
+> Phase 0 summary. `packages/`, `contracts/`, `deploy/` arrive in Phases 1+.
 
 ```
 federated-reserve/
-├── PROJECT.md                  # vision doc
-├── TECHNICAL.md                # this doc
+├── docs/
+│   ├── PROJECT.md              # vision doc
+│   ├── TECHNICAL.md            # this doc
+│   └── PHASE0_REPORT.md        # Phase 0 summary (added 2026-04-27)
 ├── README.md                   # onboarding
-├── FEEDBACK.md                 # Uniswap track requirement
+├── FEEDBACK.md                 # builder-experience notes (Uniswap track requirement)
+├── .env.example                # template for .env / .env.local
+├── .gitignore
+├── vendor/
+│   └── axl/                    # cloned + built from gensyn-ai/axl (Phase 0)
+│       └── node                # the compiled Go binary
+├── .venv/                      # Python venv with mcp_routing + a2a_serving
+├── .keys/                      # ed25519 PEMs for AXL nodes (gitignored)
+├── spikes/                     # Phase 0 dependency spikes (00 through 06)
+├── scripts/
+│   ├── derive-wallets.sh       # Phase 0; re-derives agent hierarchy from MASTER_SEED
+│   ├── deploy-contracts.ts     # Phase 3
+│   ├── seed-pools.ts           # Phase 3
+│   ├── mint-inft.ts            # Phase 5
+│   └── replay-historical.ts    # Phase 6
 ├── packages/
 │   ├── agent/                  # main agent runtime
 │   │   ├── src/
 │   │   │   ├── index.ts        # entry point, AXL registration
 │   │   │   ├── tick.ts         # main loop
-│   │   │   ├── reason.ts       # Claude integration
+│   │   │   ├── reason.ts       # OpenRouter integration (NEVER @anthropic-ai/sdk direct)
 │   │   │   ├── memory.ts       # 0G Storage wrapper
-│   │   │   ├── axl.ts          # AXL HTTP client wrapper
+│   │   │   ├── axl.ts          # AXL HTTP client wrapper (raw /send, /recv, /topology)
+│   │   │   ├── mcp-router-client.ts # registers/deregisters with Python MCP Router on :9003
 │   │   │   ├── mcp/            # MCP tools (single-shot operations)
 │   │   │   │   ├── server.ts
 │   │   │   │   └── tools/      # query_treasury, execute_swap, ...
-│   │   │   ├── a2a/            # A2A skills (multi-turn coordination)
+│   │   │   ├── a2a/            # A2A skills — custom TS server replacing bundled Python a2a_serving
+│   │   │   │   ├── server.ts   # Bun.serve on the port AXL points a2a_addr at
 │   │   │   │   ├── card.ts     # AgentCard generator (per-state)
 │   │   │   │   ├── executor.ts # AgentExecutor implementation
 │   │   │   │   └── skills/     # negotiate-bilateral-swap, bond-auction, ...
@@ -321,7 +365,11 @@ The federation's protocol, split into the right buckets.
 
 Each agent runs an MCP server registered with its local AXL node. Other agents call these via `POST localhost:9002/mcp/{peer_id}/{tool_name}`. Schemas defined with Zod, exposed via `@modelcontextprotocol/sdk`.
 
-#### Broadcast tools (fan-out via GossipSub)
+#### Broadcast tools (fan-out at the application layer)
+
+> AXL has no native pubsub. "Broadcast" tools are MCP tools that the
+> initiator calls on every peer in turn (Phase 1 implementation in
+> [`packages/agent/src/broadcast.ts`](../packages/agent/src/broadcast.ts)).
 
 ```typescript
 share_economic_indicator(
@@ -526,41 +574,102 @@ const massachusettsAgentCard: AgentCard = {
 
 ### Sample wire-up (per-agent main file)
 
+> **Phase 0 update.** The earlier draft of this section showed pseudocode
+> like `axl.registerMCP(...)` / `axl.registerA2A(...)`. Those APIs do not
+> exist — AXL has no in-process registration. Real wiring is two HTTP
+> services that AXL forwards inbound `/mcp` and `/a2a` requests to. The
+> snippet below reflects what Phase 0 spikes 01 and 02 actually validated
+> (see [`spikes/01-axl-mcp/server.ts`](../spikes/01-axl-mcp/server.ts)).
+
 ```typescript
-import { AXLClient } from './axl';  // thin wrapper over localhost:9002
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { WebStandardStreamableHTTPServerTransport }
+  from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import {
   AgentExecutor,
   DefaultRequestHandler,
   InMemoryTaskStore,
 } from '@a2a-js/sdk/server';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { massachusettsAgentCard } from './agent-card';
 import { MassachusettsAgentExecutor } from './a2a/executor';
 import { registerMcpTools } from './mcp/tools';
 
 async function main() {
-  const axl = new AXLClient({ endpoint: 'http://localhost:9002' });
+  // 1. MCP SERVER — Bun HTTP on :7100 ────────────────────────────────────
+  // The MCP SDK's stateless transport is single-use, so instantiate a
+  // fresh McpServer + transport per HTTP request (Phase 0 finding).
+  Bun.serve({
+    port: 7100,
+    hostname: '127.0.0.1',
+    fetch: async (req) => {
+      const url = new URL(req.url);
+      if (url.pathname !== '/mcp') return new Response('not found', { status: 404 });
+      const mcp = new McpServer(
+        { name: 'ma-treasurer', version: '1.0.0' },
+        { capabilities: { tools: {} } },
+      );
+      registerMcpTools(mcp, /* state, deps */);
+      const transport = new WebStandardStreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,   // stateless
+        enableJsonResponse: true,
+      });
+      await mcp.connect(transport);
+      return transport.handleRequest(req);
+    },
+  });
 
-  // 1. Register A2A executor
+  // Register with the (Python) MCP Router so AXL knows where to forward
+  // inbound `POST :9002/mcp/{peer_id}/treasurer` to.
+  await fetch('http://127.0.0.1:9003/register', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      service: 'treasurer',
+      endpoint: 'http://127.0.0.1:7100/mcp',
+    }),
+  });
+
+  // 2. A2A SERVER — custom TS service on :9004 ───────────────────────────
+  // This REPLACES the bundled Python `a2a_serving.a2a_server` because we
+  // need rich task lifecycles (Working → InputRequired → Completed) for
+  // negotiate-bilateral-swap etc. AXL is configured (in node-config.json)
+  // to forward inbound `POST :9002/a2a/{peer_id}` to a2a_addr=:9004.
   const taskStore = new InMemoryTaskStore();
   const executor = new MassachusettsAgentExecutor(/* state, deps */);
-  const a2aHandler = new DefaultRequestHandler(massachusettsAgentCard, taskStore, executor);
-  await axl.registerA2A(massachusettsAgentCard, a2aHandler);
+  const a2aHandler = new DefaultRequestHandler(
+    massachusettsAgentCard, taskStore, executor,
+  );
+  // (Wire `a2aHandler` up to a Bun.serve on :9004; the @a2a-js/sdk server
+  //  side accepts a Web-standard Request handler.)
 
-  // 2. Register MCP server
-  const mcp = new McpServer({ name: 'ma-treasurer', version: '1.0.0' });
-  registerMcpTools(mcp, /* state, deps */);
-  await axl.registerMCP('treasurer', mcp);
-
-  // 3. Subscribe to GossipSub topics
-  await axl.subscribe(['indicators', 'fed-rate', 'shocks', 'bond-auctions'], onBroadcast);
+  // 3. App-level broadcast fan-out helper (no GossipSub primitive in AXL)
+  //    — see packages/agent/src/broadcast.ts. The tick loop calls this
+  //    each iteration to fan out share_economic_indicator etc.
+  startTickLoop(/* state, deps, axl, broadcast */);
 
   // 4. Start tick loop
   startTickLoop(/* state, deps */);
 }
 ```
 
+**AXL itself runs as a sidecar** (e.g. via `vendor/axl/node -config node-X.json`
+in a separate process or container). Its `node-config.json` for an agent host
+must include:
+
+```json
+{
+  "router_addr": "http://127.0.0.1", "router_port": 9003,
+  "a2a_addr":    "http://127.0.0.1", "a2a_port":    9004
+}
+```
+
 ### Calling a peer
+
+> **Phase 1 prerequisite.** The snippet below needs the **custom TS A2A
+> server** (not the bundled Python `a2a_serving`) running on the receiving
+> side, otherwise the multi-turn `Working → InputRequired → Completed`
+> lifecycle won't materialize — the bundled server collapses everything to a
+> single request/response wrapped MCP call.
 
 ```typescript
 // MA wants to negotiate a bilateral swap with CA
@@ -611,7 +720,7 @@ const response = await fetch(`http://localhost:9002/mcp/${CA_PEER_ID}/treasurer`
 });
 ```
 
-The observer service runs its own AXL node that subscribes to all GossipSub topics and exposes a WebSocket to the frontend.
+The observer service runs its own AXL node and exposes both the same MCP `share_economic_indicator` tool the agents use (so other agents fan out indicators to it for free) and a WebSocket to the frontend that re-emits each received message.
 
 ---
 
@@ -619,39 +728,49 @@ The observer service runs its own AXL node that subscribes to all GossipSub topi
 
 Seven days, structured as phases with concrete deliverables. **Day 0 is a half-day spike before "real" Day 1** — it gates whether AXL is viable.
 
-### Phase 0 — Spike (Day 0, half-day, 4-6 hours)
+### Phase 0 — Spike (Day 0, half-day, 4-6 hours) — ✅ COMPLETE 2026-04-27
 
-**Purpose:** Prove the three external dependencies work before committing to them.
+**Purpose:** Prove the external dependencies work before committing to them.
+**Outcome:** Three AXL spikes green; four data/chain spikes scaffolded and
+SKIP cleanly until creds + funded wallets land. Full report in
+[docs/PHASE0_REPORT.md](./PHASE0_REPORT.md).
 
-- [ ] Clone `gensyn-ai/axl`, build the binary, run two nodes locally
-- [ ] Read `gensyn-ai/collaborative-autoresearch-demo` end to end before writing code — it's the reference impl for MCP-over-AXL
-- [ ] **MCP-over-AXL spike:** wire `@modelcontextprotocol/sdk` server into AXL on node A, call its tool from node B via `localhost:9002/mcp/{peer_id}/{service}`. Verify round-trip
-- [ ] **A2A-over-AXL spike:** wire `@a2a-js/sdk` `DefaultRequestHandler` into AXL on node A with a trivial AgentCard, call a skill from node B via `A2AClient` pointed at `localhost:9002/a2a/{peer_id}`. Verify task lifecycle
-- [ ] Sign up for Uniswap Developer Platform key, hit `/v1/quote` from Bun script, verify response shape
-- [ ] Sign up for FRED API key, hit one state-level series, verify shape
-- [ ] Get 0G testnet tokens, deploy a hello-world ERC-721 (not even ERC-7857 yet) on 0G Chain testnet, verify deployed address shows on explorer
-- [ ] Get Unichain Sepolia tokens, deploy a hello-world ERC-20 via Foundry, verify on explorer
+- [x] Clone `gensyn-ai/axl`, build the binary, run two nodes locally — built into [`vendor/axl/node`](../vendor/axl/)
+- [x] **AXL transport spike** — [`spikes/00-axl-nodes`](../spikes/00-axl-nodes); `/topology` + `/send` + `/recv` round-trip ✅
+- [x] **MCP-over-AXL spike** — [`spikes/01-axl-mcp`](../spikes/01-axl-mcp); TS `@modelcontextprotocol/sdk` server registers with Python MCP Router, peer calls `tools/list` and `tools/call` ✅
+- [x] **A2A-over-AXL spike** — [`spikes/02-axl-a2a`](../spikes/02-axl-a2a); bundled Python A2A server returns agent card and round-trips `SendMessage` ✅ (limitation noted: bundled server is MCP-derived; a custom TS A2A server is a Phase 1 task)
+- [x] Uniswap `/v1/quote` Bun script — [`spikes/03-uniswap-quote`](../spikes/03-uniswap-quote) ⏸ SKIP until `UNISWAP_API_KEY` populated
+- [x] FRED state-level series Bun script — [`spikes/04-fred-series`](../spikes/04-fred-series) ⏸ SKIP until `FRED_API_KEY` populated
+- [x] 0G hello-world ERC-721 Foundry deploy — [`spikes/05-0g-erc721`](../spikes/05-0g-erc721) ⏸ SKIP until deployer funded on 0G testnet
+- [x] Unichain Sepolia hello-world ERC-20 Foundry deploy — [`spikes/06-unichain-erc20`](../spikes/06-unichain-erc20) ⏸ SKIP until deployer funded on Unichain Sepolia
 
-**Deliverable:** A `spikes/` directory with working scripts proving each external dependency. Tag commits `spike(axl-mcp)`, `spike(axl-a2a)`, `spike(uniswap)`, `spike(fred)`, `spike(0g)`, `spike(unichain)`.
+**Findings folded back into this doc** (see Phase 0 callouts throughout):
+the Python integrations are mandatory, the bundled A2A server is too thin
+for our Phase 1+ skills, MCP SDK stateless transport is single-use, and
+several pinned-version workarounds — all captured under the new
+[Pinned versions and Phase 0 gotchas](#pinned-versions-and-phase-0-gotchas)
+section below. [FEEDBACK.md](../FEEDBACK.md) has the full builder-experience log.
 
-**Gate:** If AXL spike fails, escalate immediately (Gensyn Discord). Don't burn Day 1 alone on this.
+**Gate result:** AXL works → cleared to start Phase 1.
 
-### Phase 1 — Mesh Foundation (Day 1)
+### Phase 1 — Mesh Foundation (Day 1) — ✅ COMPLETE 2026-04-27
 
 **Purpose:** AXL is the primary track. Get the mesh working as a real distributed system before any economic logic. **Both** MCP and A2A working through AXL by end of day — proves the protocol-layering thesis.
 
-- [ ] Repo scaffold (monorepo, Bun workspaces, shared TS config, Biome for linting)
-- [ ] `packages/shared` — types, MCP tool schemas (Zod), A2A skill type definitions, state metadata for all 50 + DC + PR
-- [ ] Add deps: `@a2a-js/sdk`, `@modelcontextprotocol/sdk`, `viem`, `zod`
-- [ ] `packages/agent` skeleton — main loop, AXL HTTP client wrapper
-- [ ] AXL registration helpers — `axl.registerMCP(name, mcpServer)`, `axl.registerA2A(card, handler)`, `axl.subscribe(topics, handler)`
-- [ ] One Dockerfile for agent runtime + AXL binary
-- [ ] `deploy/compose/local-mesh.yml` running 3 agent containers + 1 bootstrap container locally
-- [ ] **MCP test:** 3 agents broadcast `share_economic_indicator` via GossipSub, all 3 receive it
-- [ ] **MCP test:** agent A calls `query_treasury` MCP tool on agent B, gets structured response
-- [ ] **A2A test:** agent A invokes `negotiate-bilateral-swap` skill on agent B, gets back a Task with at least one InputRequired round-trip and a Completed terminal state (logic can be stubbed — what matters is the lifecycle works)
+**Outcome:** 3-agent local mesh (MA/CA/TX) running end-to-end. All three
+gate tests green. Full report in [docs/PHASE1_REPORT.md](./PHASE1_REPORT.md).
 
-**Deliverable:** Three agents in three containers, exchanging both MCP tool calls and A2A skill invocations through real AXL transport. Commit `phase-1-mesh-foundation`.
+- [x] Repo scaffold ([package.json](../package.json) + Bun workspaces, [tsconfig.base.json](../tsconfig.base.json), [biome.json](../biome.json))
+- [x] `packages/shared` — types, MCP tool Zod schemas, A2A skill types, state metadata for 50+DC+PR (all entries with FIPS/abbr/name/region/tier)
+- [x] Deps wired: `@a2a-js/sdk`, `@modelcontextprotocol/sdk`, `zod` (viem deferred to Phase 3 — no chain code yet; OpenRouter client deferred to Phase 2 alongside reasoning)
+- [x] `packages/agent` skeleton — entry point with startup/shutdown ordering, MCP-router-client (`POST :9003/register` + deregister), per-request `McpServer` factory
+- [x] **Custom TS A2A server** using `@a2a-js/sdk` `DefaultRequestHandler` + `JsonRpcTransportHandler` over `Bun.serve`, replacing the bundled Python `a2a_serving.a2a_server`. Hosts the multi-turn `negotiate-bilateral-swap` lifecycle (deterministic stub for Phase 1; OpenRouter wires in at Phase 2).
+- [ ] Dockerfile per agent + `deploy/compose/local-mesh.yml` — **deferred to Phase 6 packaging.** Phase 1 confirmed the topology with bare Bun processes via [`scripts/run-local-mesh.sh`](../scripts/run-local-mesh.sh); containerization is a packaging concern, not a correctness concern.
+- [x] **MCP test:** app-level `share_economic_indicator` fan-out — receivers log the indicator. AXL has **no native pubsub**; broadcasts are O(N) MCP fan-outs over `/mcp/{peer}/treasurer`. ([`scripts/test-mcp-broadcast.sh`](../scripts/test-mcp-broadcast.sh))
+- [x] **MCP test:** agent A calls `query_treasury` MCP tool on agent B over AXL. ([`scripts/test-mcp-unicast.sh`](../scripts/test-mcp-unicast.sh))
+- [x] **A2A test:** `negotiate-bilateral-swap` lifecycle `Working → InputRequired → Working → Completed` over the custom TS A2A server. ([`scripts/test-a2a-negotiate.sh`](../scripts/test-a2a-negotiate.sh))
+
+**Deliverable:** ✅ 3 agents on bare Bun processes (containerization is Phase 6) exchanging both MCP tool calls and A2A skill invocations through real AXL transport.
 
 ### Phase 2 — Memory + Reasoning + AgentCards (Day 2)
 
@@ -679,7 +798,7 @@ Seven days, structured as phases with concrete deliverables. **Day 0 is a half-d
 - [ ] Seed Uniswap V4 pools on Unichain Sepolia: USDC paired with each StateToken (8 pools). Use the LP API
 - [ ] `packages/agent/src/execute.ts` — Uniswap Trading API integration. Quote → swap → submit → confirm. Wallet per agent (deterministic from seed)
 - [ ] First end-to-end: agent A proposes swap via MCP to agent B, agent B accepts, both execute their legs on Unichain. Verify both wallets show updated balances on explorer
-- [ ] Bond issuance flow: agent issues a BondToken, broadcasts auction over GossipSub, peer agents bid via MCP, settlement via Uniswap
+- [ ] Bond issuance flow: agent issues a BondToken, fans out an `announce_bond_auction` MCP broadcast, peer agents bid via MCP, settlement via Uniswap
 
 **Deliverable:** Real onchain swaps fired by AXL message exchange. FEEDBACK.md started with first batch of API friction notes. Commit `phase-3-settlement`.
 
@@ -703,7 +822,7 @@ Seven days, structured as phases with concrete deliverables. **Day 0 is a half-d
 
 **Purpose:** Make it watchable. iNFT track deliverable.
 
-- [ ] `packages/observer` — Bun/Hono service that runs an AXL node, subscribes to all GossipSub topics, aggregates mesh state in-memory, serves WebSocket to frontend
+- [ ] `packages/observer` — Bun/Hono service that runs an AXL node and an MCP server exposing `share_economic_indicator` (so agents fan out indicators to it like any other peer), aggregates mesh state in-memory, serves WebSocket to frontend
 - [ ] `packages/frontend` — Next.js 15 app, shadcn/ui components, Tailwind
   - US map component (deck.gl + MapLibre, state polygons from Census TIGER GeoJSON)
   - Live state colorization based on treasury health
@@ -760,7 +879,14 @@ Seven days, structured as phases with concrete deliverables. **Day 0 is a half-d
 
 ### Local development
 
-`docker-compose` brings up the full local mesh:
+`docker-compose` brings up the full local mesh.
+
+> **Phase 0 reality:** each agent container actually runs **four processes** —
+> AXL node + Python MCP Router + TS MCP server + TS A2A server (see the
+> per-agent diagram earlier). The compose sketch below collapses them into a
+> single `image: federated-reserve/agent:latest` started by an entrypoint
+> script. See [docs/PHASE0_REPORT.md](./PHASE0_REPORT.md) for the validated
+> startup ordering.
 
 ```yaml
 # deploy/compose/local-mesh.yml (sketch)
@@ -781,7 +907,7 @@ services:
       STATE_FIPS: "25"
       STATE_NAME: "Massachusetts"
       BOOTSTRAP_PEER: <pubkey-of-bootstrap>
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}    # NOT ANTHROPIC_API_KEY
       OG_RPC_URL: ${OG_RPC_URL}
       UNISWAP_API_KEY: ${UNISWAP_API_KEY}
       WALLET_INDEX: 25
@@ -873,7 +999,7 @@ The other 40 states run as containers on a single larger Fly machine in `iad`. E
 All secrets via Fly secrets / Vercel env vars:
 
 ```
-ANTHROPIC_API_KEY
+OPENROUTER_API_KEY        # all LLM calls — never use ANTHROPIC_API_KEY directly
 FRED_API_KEY
 BLS_API_KEY
 BEA_API_KEY
@@ -881,8 +1007,8 @@ UNISWAP_API_KEY
 OG_RPC_URL
 OG_STORAGE_URL
 UNICHAIN_SEPOLIA_RPC
-MASTER_SEED               # for deterministic wallet derivation
-INFT_DEPLOYER_PRIVATE_KEY # for minting iNFTs
+MASTER_SEED               # BIP-39, for deterministic wallet derivation (Phase 1+ derives at runtime)
+INFT_DEPLOYER_PRIVATE_KEY # for minting iNFTs (Phase 5)
 ```
 
 **Rate-limit handling per source:**
@@ -895,7 +1021,7 @@ INFT_DEPLOYER_PRIVATE_KEY # for minting iNFTs
 | Census | Generous | Pull annual data once at start, cache forever |
 | GDELT | None published, be polite | Poll every 15 min, dedupe by article hash |
 | NOAA | Generous | Poll storm events daily |
-| Anthropic | Tier-based | 8 deep agents at quarterly tick = ~64 req/hour, well under limits. Observers use cheaper model or rule-based |
+| OpenRouter | Per-model + account credits | **All 50 agents are LLM-driven** — keeps the thesis honest. Tier by model: `anthropic/claude-opus-4-7` for the ~10 deep agents (full skill set, initiate strategies), `anthropic/claude-haiku-4-5` for the ~40 observers (persona-driven, respond to incoming proposals, don't initiate coalitions). At ~5K tokens/tick × 40 observers × 24 ticks/day, Haiku across observers is roughly $5-10/day. Only fall back to rule-based logic in a cost emergency. |
 | Uniswap Trading API | Generous on dev tier | Quote before every swap, no batch cleverness needed |
 | 0G Storage | Testnet, watch for instability | Retry with exponential backoff, fall back to local cache + replay |
 
@@ -904,9 +1030,30 @@ INFT_DEPLOYER_PRIVATE_KEY # for minting iNFTs
 ### Wallet management
 
 - Single `MASTER_SEED` (BIP-39 mnemonic) for the demo. Derive each agent's wallet at index = state FIPS code.
+- Index assignments (Phase 0 chose these to avoid FIPS collisions): `0` = master deployer / faucet, `100` = Federal Reserve, `101` = Treasury, `N` = state agent at FIPS `N` (MA=25, CA=6, TX=48, NY=36, FL=12, IL=17, WA=53, AK=2).
 - Deterministic, reproducible across deploys.
+- Phase 0 produced [`scripts/derive-wallets.sh`](../scripts/derive-wallets.sh) which re-derives the full hierarchy from `MASTER_SEED` via `cast wallet private-key`. Output is pasted into `.env.local` (gitignored). Phase 1 should replace this with runtime derivation via `viem`'s `mnemonicToAccount(seed, { addressIndex })` — `.env.local` then carries only `MASTER_SEED`, not 22 extra `WALLET_*_*` lines.
 - All wallets pre-funded from a faucet operator wallet during Phase 3 deployment.
 - Production-grade: would use per-agent KMS or per-agent CDP Server Wallets, but for a 7-day testnet demo, the seed approach is appropriate and clearly documented.
+
+### Pinned versions and Phase 0 gotchas
+
+Concrete things Phase 0 surfaced that future-you (or another agent reading
+this doc) WILL trip on if you don't honor them. Full builder-experience log
+is in [FEEDBACK.md](../FEEDBACK.md).
+
+| Concern | Required setting / workaround |
+|---|---|
+| `protobuf` Python package | Pin **`protobuf<6`** (we run 5.29.6). The `a2a` lib's `proto_utils.py` calls the removed `field.label`. Without this pin, every A2A `SendMessage` returns JSON-RPC `-32603` `'FieldDescriptor' object has no attribute 'label'`. |
+| `sse_starlette` Python package | **Must `pip install sse_starlette` separately.** AXL's `integrations/pyproject.toml` underdeclares this transitive — `python -m a2a_serving.a2a_server --help` crashes on import without it. |
+| Go toolchain for AXL build | **Go 1.25.5** (pinned by `vendor/axl/Makefile` via `GOTOOLCHAIN=go1.25.5`). Brew's Go 1.26 is fine because Go auto-fetches the pinned toolchain — but only if `go env GOTOOLCHAIN` returns `auto` (the default). gvisor refuses to build directly on Go 1.26. |
+| AXL `tcp_port` across nodes | **Same on every node**, including same-machine ones. Public AXL docs say to differ them; that's wrong — `api/send.go`'s `dialPeerConnection` uses the local node's `TCPPort` as the *destination* port. gVisor TCP is virtual per-process so there's no host-port collision. Default `7000` on all nodes. |
+| Local 2-node peering config | One node `Listen`s on `tls://127.0.0.1:9001`, the other lists that as a `Peers` entry. The public get-started example omits `Listen`/`Peers` for the second node, leaving both with empty peer lists. |
+| Yggdrasil → gVisor TCP settle | After `/topology` reports a peer, allow **3-6s** before the first `/send` — TLS link is up but the gVisor TCP listener may briefly refuse. Retry with backoff. |
+| MCP SDK transport for Bun | Use **`WebStandardStreamableHTTPServerTransport`**, not the Node-only `StreamableHTTPServerTransport`. Its `handleRequest(req: Request): Promise<Response>` drops directly into `Bun.serve({ fetch })`. |
+| MCP SDK stateless transport | When `sessionIdGenerator: undefined`, the transport is **single-use per request** — instantiate fresh `McpServer + transport` per HTTP request. The SDK throws `"Stateless transport cannot be reused across requests"` on the second call otherwise. |
+| Python integration startup order | AXL node → MCP router → MCP server → A2A server → caller. The bundled A2A server fetches `/topology` synchronously on startup to learn its own peer ID. |
+| MCP `tools/call` response shape | Result is `{ content: [{ type: 'text', text: '<json string>' }] }` with the inner JSON-stringified (escaped quotes inside `text`). Parse, don't grep raw. |
 
 ### Monitoring
 
@@ -939,11 +1086,11 @@ This composition is also exactly what the AXL "depth of integration" judging cri
 
 ### Why one observer node and not per-agent direct connections
 
-The frontend doesn't need its own AXL node per agent — it needs to *see* the mesh. The observer is a peer that subscribes to all GossipSub topics and serves a normalized view to the frontend. This keeps the frontend simple (WebSocket consumer) and means the AXL participation is genuinely peer-to-peer (the observer is just another peer).
+The frontend doesn't need its own AXL node per agent — it needs to *see* the mesh. The observer is a peer that registers an MCP server with the standard `share_economic_indicator` tool so the agent fan-outs naturally include it, then serves a normalized view to the frontend. This keeps the frontend simple (WebSocket consumer) and means the AXL participation is genuinely peer-to-peer (the observer is just another peer).
 
 ### Why 8-10 deep agents and not 50
 
-The "all 50 states" framing is what makes this *narratively* powerful. The "8-10 deep" choice is what makes it *technically* feasible. Resolution: the 8-10 are deep agents (Claude API, full reasoning, persona, full primitive support). The other 40 are observer-class — they participate in the mesh, broadcast their state's data, accept incoming proposals (with simple accept-or-reject heuristics), but don't initiate complex strategies. This is honest in the README and natural in the architecture.
+The "all 50 states" framing is what makes this *narratively* powerful. The "8-10 deep" choice is what makes it *technically* feasible. Resolution: **every agent is LLM-driven and persona-driven** (the thesis collapses if observers are dumb rules) — the difference is model tier and initiative scope. The 8-10 deep agents run on Claude Opus 4.7, have hand-tuned personas, full primitive support, and initiate complex strategies (coalitions, multi-leg swaps, bond auctions). The other 40 observer-class agents run on Claude Haiku 4.5, still have state-specific personas, broadcast their state's data, and reason over incoming proposals (accept / reject / counter), but don't initiate large-scale strategies. Cost: deep agents ~$2-5/day total, observers ~$5-10/day total — both via OpenRouter. Rule-based logic is a cost-emergency fallback only.
 
 ### iNFT-specific implementation notes
 
@@ -967,7 +1114,7 @@ To prove "intelligence is embedded": the demo includes a step where we transfer 
 - [ ] Public GitHub repo
 - [ ] README with clear setup
 - [ ] Demonstration of mesh communication across separate AXL nodes (deployed Fly machines)
-- [ ] Documentation of how MCP, A2A, GossipSub, and Convergecast are used (the protocol-layering story)
+- [ ] Documentation of how MCP, A2A, and our app-level broadcast/convergecast patterns are used (the protocol-layering story; "GossipSub" is not an AXL primitive — broadcasts are MCP fan-outs)
 - [ ] Both `@modelcontextprotocol/sdk` and `@a2a-js/sdk` integrated through AXL transport
 - [ ] Working examples (the live deployment + replay script)
 - [ ] Demo video showing depth of AXL integration (mesh resilience: kill a node, watch routing adapt)
@@ -994,7 +1141,8 @@ To prove "intelligence is embedded": the demo includes a step where we transfer 
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| AXL has rough edges, mesh unstable | Medium | Day 0 spike. Discord. Fall back to fewer real-VM agents + more local containers if mesh is fragile in production. |
+| AXL has rough edges, mesh unstable | ~~Medium~~ → Low (Phase 0 cleared) | Phase 0 spikes 00/01/02 all green. Real risks now scoped: must pin `protobuf<6`, must `pip install sse_starlette`, must use same `tcp_port` across nodes — see [Pinned versions and Phase 0 gotchas](#pinned-versions-and-phase-0-gotchas). |
+| Bundled Python A2A server too thin for our skills | Medium | Phase 1 must ship a custom TS A2A server using `@a2a-js/sdk` `DefaultRequestHandler`, point AXL at it via `a2a_addr`. The bundled server is fine for spikes but can't host `Working → InputRequired → Completed` task lifecycles. |
 | Unichain Sepolia RPC flaky during demo | Medium | Pre-seed pools and balances before demo. Have backup recording of working demo as failsafe. |
 | 0G testnet down during minting | Low-medium | Mint Phase 5, not Phase 7. Have backup of pre-minted iNFT data ready. |
 | Claude rate limits hit on demo | Low | 8 deep agents at 1hr tick is well under limits. Pre-warm caches. |
