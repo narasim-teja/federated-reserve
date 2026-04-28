@@ -24,8 +24,10 @@ import {
 import { z } from 'zod';
 import { TokenBucket, runWithConcurrency } from '../rate-limit.ts';
 
-// FRED budget: 120 req/min documented → use 80 req/min (1.33/s) at burst 8.
-const FRED_RATE_LIMITER = new TokenBucket({ ratePerSec: 80 / 60, burst: 8 });
+// FRED budget: 120 req/min documented. We saw 429s in practice well below
+// that, so we run conservatively at 60 req/min (1 req/sec). Real-world
+// state-series volume is ~104 reqs once per hour — well within budget.
+const FRED_RATE_LIMITER = new TokenBucket({ ratePerSec: 1 });
 
 const fredObservationSchema = z.object({
   date: z.string(),
@@ -58,46 +60,66 @@ interface FetchSeriesOptions {
   signal?: AbortSignal;
 }
 
+const RETRY_DELAYS_MS = [1500, 4000, 9000] as const;
+
 async function fetchLatestSeries(opts: FetchSeriesOptions): Promise<IndicatorObservation | null> {
   const seriesId = opts.spec.template.replace('{abbr}', opts.abbr);
-  await FRED_RATE_LIMITER.acquire();
 
-  const url = new URL('https://api.stlouisfed.org/fred/series/observations');
-  url.searchParams.set('series_id', seriesId);
-  url.searchParams.set('api_key', opts.apiKey);
-  url.searchParams.set('file_type', 'json');
-  url.searchParams.set('sort_order', 'desc');
-  url.searchParams.set('limit', '1');
+  // Retry loop covers transient 429s and 5xxs. Rate-limiter acquisition
+  // happens *inside* the retry loop so each retry waits for a fresh slot.
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    await FRED_RATE_LIMITER.acquire();
 
-  const res = await fetch(url, { signal: opts.signal });
-  if (res.status === 429) {
-    throw new Error(`FRED 429 Too Many Requests on ${seriesId}`);
-  }
-  if (!res.ok) {
-    const body = (await res.text()).slice(0, 300);
-    // 400 typically means series doesn't exist for that state — skip silently.
+    const url = new URL('https://api.stlouisfed.org/fred/series/observations');
+    url.searchParams.set('series_id', seriesId);
+    url.searchParams.set('api_key', opts.apiKey);
+    url.searchParams.set('file_type', 'json');
+    url.searchParams.set('sort_order', 'desc');
+    url.searchParams.set('limit', '1');
+
+    const res = await fetch(url, { signal: opts.signal });
+
+    // Retryable: 429 and 5xx
+    if (res.status === 429 || res.status >= 500) {
+      lastErr = new Error(`FRED ${res.status} on ${seriesId}`);
+      if (attempt < RETRY_DELAYS_MS.length) {
+        await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+        continue;
+      }
+      throw lastErr;
+    }
+
+    // 400 — typically means series doesn't exist for that state. Skip silently.
     if (res.status === 400) return null;
-    throw new Error(`FRED ${res.status} on ${seriesId}: ${body}`);
+
+    if (!res.ok) {
+      const body = (await res.text()).slice(0, 300);
+      throw new Error(`FRED ${res.status} on ${seriesId}: ${body}`);
+    }
+
+    const json = await res.json();
+    const parsed = fredResponseSchema.safeParse(json);
+    if (!parsed.success) {
+      throw new Error(`FRED bad response for ${seriesId}: ${parsed.error.message}`);
+    }
+    const latest = parsed.data.observations[0];
+    if (!latest || latest.value === '.') return null;
+
+    const numeric = Number(latest.value);
+    if (!Number.isFinite(numeric)) return null;
+
+    const value = opts.spec.transform ? opts.spec.transform(numeric) : numeric;
+    return {
+      value,
+      observation_date: latest.date,
+      source: `FRED:${seriesId}`,
+      fetched_at: new Date().toISOString(),
+    };
   }
 
-  const json = await res.json();
-  const parsed = fredResponseSchema.safeParse(json);
-  if (!parsed.success) {
-    throw new Error(`FRED bad response for ${seriesId}: ${parsed.error.message}`);
-  }
-  const latest = parsed.data.observations[0];
-  if (!latest || latest.value === '.') return null;
-
-  const numeric = Number(latest.value);
-  if (!Number.isFinite(numeric)) return null;
-
-  const value = opts.spec.transform ? opts.spec.transform(numeric) : numeric;
-  return {
-    value,
-    observation_date: latest.date,
-    source: `FRED:${seriesId}`,
-    fetched_at: new Date().toISOString(),
-  };
+  // unreachable, but keeps tsc happy
+  throw lastErr ?? new Error('FRED fetch failed');
 }
 
 export interface FetchAllOptions {
@@ -127,7 +149,10 @@ export interface FetchAllResult {
 export async function fetchAllStates(opts: FetchAllOptions): Promise<FetchAllResult> {
   const states = opts.states ?? STATES;
   const series = opts.series ?? DEFAULT_FRED_SERIES;
-  const concurrency = opts.concurrency ?? 4;
+  // Concurrency is mostly cosmetic now that the rate limiter serializes
+  // — keep at 2 so the second worker preps its URL while the first is
+  // in flight, masking some network latency.
+  const concurrency = opts.concurrency ?? 2;
   const errors: FetchAllResult['errors'] = [];
 
   const snapshots = await runWithConcurrency(states, concurrency, async (state) => {

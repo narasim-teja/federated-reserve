@@ -32,8 +32,19 @@ CONFIG_DIR="$ROOT/mesh/configs"
 KEY_DIR="$ROOT/.keys"
 PID_FILE="/tmp/federated-reserve-mesh.pids"
 LOG_DIR="${LOG_DIR:-/tmp/federated-reserve}"
-DATA_PLANE_PORT="${DATA_PLANE_PORT:-3002}"
 mkdir -p "$LOG_DIR"
+
+# Source .env.local so child processes (which cd into package dirs) inherit
+# FRED_API_KEY, OPENROUTER_API_KEY, presets, etc. Bun auto-loads .env.local
+# from cwd, but children cd elsewhere so we export from the repo root.
+if [[ -f "$ROOT/.env.local" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$ROOT/.env.local"
+  set +a
+fi
+
+DATA_PLANE_PORT="${DATA_PLANE_PORT:-3002}"
 
 cmd="${1:-run}"
 
@@ -193,7 +204,9 @@ for entry in "${AGENTS[@]}"; do
     MCP_SERVER_PORT="$mcp" \
     A2A_SERVER_PORT="$a2a" \
     DATA_PLANE_URL="http://127.0.0.1:$DATA_PLANE_PORT" \
+    MEMORY_ROOT="$ROOT/memory" \
     TICK_INTERVAL_MS="${TICK_INTERVAL_MS:-30000}" \
+    REFLECT_EVERY_N_TICKS="${REFLECT_EVERY_N_TICKS:-4}" \
     bun run src/index.ts
   ) > "$LOG_DIR/agent-$name.log" 2>&1 &
   echo $! >> "$PID_FILE"

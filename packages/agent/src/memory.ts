@@ -57,7 +57,12 @@ export interface AgentMemory {
 interface LocalDiskMemoryOptions {
   /** Stable key for this agent — usually `state.abbr` lowercased. */
   agentKey: string;
-  /** Root directory; defaults to `<repo-root>/memory`. */
+  /**
+   * Root directory; if omitted, resolves in this order:
+   *   1. `MEMORY_ROOT` env var (mesh runner sets this to the repo root's
+   *      `memory/` so all agents share one location regardless of cwd)
+   *   2. `<process.cwd()>/memory` as a final fallback
+   */
   rootDir?: string;
 }
 
@@ -67,7 +72,10 @@ export class LocalDiskMemory implements AgentMemory {
   private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(opts: LocalDiskMemoryOptions) {
-    const root = opts.rootDir ?? resolve(process.cwd(), 'memory');
+    const root =
+      opts.rootDir ??
+      process.env.MEMORY_ROOT ??
+      resolve(process.cwd(), 'memory');
     const dir = resolve(root, opts.agentKey);
     this.stateFile = resolve(dir, 'state.json');
     this.logFile = resolve(dir, 'log.jsonl');
