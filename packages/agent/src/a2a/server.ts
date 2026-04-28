@@ -21,6 +21,7 @@ import {
   JsonRpcTransportHandler,
 } from '@a2a-js/sdk/server';
 import type { AgentConfig } from '../config.ts';
+import type { SwapExecutor } from '../execute.ts';
 import type { Reasoner } from '../reason.ts';
 import type { AgentState } from '../state.ts';
 import { buildAgentCard } from './card.ts';
@@ -37,10 +38,17 @@ export function startA2aServer(
   state: AgentState,
   reasoner?: Reasoner,
   systemPrompt?: string,
+  swapExecutor?: SwapExecutor,
 ): A2aServerHandle {
   const agentCard = buildAgentCard(cfg);
   const taskStore = new InMemoryTaskStore();
-  const executor = new FederatedReserveAgentExecutor(cfg, state, reasoner, systemPrompt);
+  const executor = new FederatedReserveAgentExecutor(
+    cfg,
+    state,
+    reasoner,
+    systemPrompt,
+    swapExecutor,
+  );
   const requestHandler = new DefaultRequestHandler(agentCard, taskStore, executor);
   const transport = new JsonRpcTransportHandler(requestHandler);
 

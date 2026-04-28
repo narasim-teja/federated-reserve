@@ -57,6 +57,21 @@ export interface AgentConfig {
    * deterministic logic. Useful in CI / when key is a placeholder.
    */
   reasoningEnabled: boolean;
+  /**
+   * Phase 3 onchain settlement config. When `enabled`, the negotiate-bilateral
+   * -swap A2A executor fires the responder leg via the Uniswap Trading API
+   * before emitting Completed. Skipped when env vars are missing (Phase 1+2
+   * fallback path stays intact).
+   */
+  settlement: {
+    enabled: boolean;
+    chainId: number;
+    rpc: string;
+    /** Trading API key. */
+    uniswapApiKey: string;
+    /** This agent's private key (e.g. WALLET_MA_PRIVATE_KEY). */
+    walletPrivateKey: `0x${string}` | undefined;
+  };
 }
 
 export function loadConfig(): AgentConfig {
@@ -91,6 +106,24 @@ export function loadConfig(): AgentConfig {
     tickIntervalMs: readNumber('TICK_INTERVAL_MS', 30_000),
     reflectEveryNTicks: readNumber('REFLECT_EVERY_N_TICKS', 4),
     reasoningEnabled,
+    settlement: ((): AgentConfig['settlement'] => {
+      const pkEnv = process.env[`WALLET_${state.abbr}_PRIVATE_KEY`];
+      const apiKey = process.env.UNISWAP_API_KEY ?? '';
+      const chainId = readNumber('UNICHAIN_SEPOLIA_CHAIN_ID', 1301);
+      const rpc = readString('UNICHAIN_SEPOLIA_RPC', 'https://sepolia.unichain.org');
+      const havePk = !!pkEnv && pkEnv.startsWith('0x') && pkEnv !== '0xPLACEHOLDER';
+      const haveKey =
+        !!apiKey &&
+        apiKey !== 'PLACEHOLDER_UNISWAP_DEV_PORTAL_KEY' &&
+        process.env.SETTLEMENT_ENABLED !== '0';
+      return {
+        enabled: havePk && haveKey,
+        chainId,
+        rpc,
+        uniswapApiKey: apiKey,
+        walletPrivateKey: havePk ? (pkEnv as `0x${string}`) : undefined,
+      };
+    })(),
   };
 }
 

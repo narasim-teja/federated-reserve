@@ -58,5 +58,90 @@
   "reserves": {
     "perPoolUsdc": "100000000000",
     "perPoolStateToken": "100000000000000000000000"
-  }
+  },
+  "pools": {
+    "v3Factory": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+    "nonfungiblePositionManager": "0xB7F724d6dDDFd008eFf5cc2834edDE5F9eF0d075",
+    "fee": 3000,
+    "tickLower": -887220,
+    "tickUpper": 887220,
+    "byState": {
+      "MA": {
+        "state": "MA",
+        "pair": "USDC-MAT",
+        "token0": "0x462b31b02e00d0dec2aeb79437e20e9fa3b96f94",
+        "token1": "0x7a87ff3dd531e79a2d08720374beb9670b9f2780",
+        "fee": 3000,
+        "sqrtPriceX96": "79228162514264337593543950336000000",
+        "poolAddress": "0xF907C498AEf0022D935Adc196a26372e516Dc26c",
+        "tokenId": "418096",
+        "liquidity": "100000000000000000",
+        "amount0Used": "100000000000",
+        "amount1Used": "100000000000000000000000",
+        "initTx": "0x29b82bf825af729e359c2389e8ae0aaedeed69aa1fbd70c96b4d1c51a8f4d475",
+        "mintTx": "0x487e12b0fb74f32e0006d307a41dd9e038c1beb18d080b44e7a1d427648cb4c4"
+      },
+      "CA": {
+        "state": "CA",
+        "pair": "CAT-USDC",
+        "token0": "0x0411752c54f84d35d99c55937fb70d66382b0645",
+        "token1": "0x462b31b02e00d0dec2aeb79437e20e9fa3b96f94",
+        "fee": 3000,
+        "sqrtPriceX96": "79228162514264337593543",
+        "poolAddress": "0x8b1789f11BA6AC1b24d45e5AEA5F4532fAB44B06",
+        "tokenId": "418098",
+        "liquidity": "99999999999999999",
+        "amount0Used": "99999999999999999000002",
+        "amount1Used": "100000000000",
+        "initTx": "0x42e8edbb152e59fb0bf970e141ca207bcc43174245521cdeb39a4ddc7a16a929",
+        "mintTx": "0x52072410260447baaa86bde6b971af4434f11b1d09fbaf22a6ac8f32cf5c5723"
+      },
+      "TX": {
+        "state": "TX",
+        "pair": "USDC-TXT",
+        "token0": "0x462b31b02e00d0dec2aeb79437e20e9fa3b96f94",
+        "token1": "0x4cdf222770c0231204446f3c516cb8664bd9948a",
+        "fee": 3000,
+        "sqrtPriceX96": "79228162514264337593543950336000000",
+        "poolAddress": "0xB411a18F24549079AAB1026FE81cde1d9a48ac23",
+        "tokenId": "418099",
+        "liquidity": "100000000000000000",
+        "amount0Used": "100000000000",
+        "amount1Used": "100000000000000000000000",
+        "initTx": "0xa7cc5fdfe1ce285d9d3fb15b9be25299a73f6b6d1604f0b40f1faad7c2eb9c77",
+        "mintTx": "0x0c6ba418b463f297a70127d67a7f8e6e06f58a765cd5e15f62b9259c9446809e"
+      },
+      "NY": {
+        "state": "NY",
+        "pair": "USDC-NYT",
+        "token0": "0x462b31b02e00d0dec2aeb79437e20e9fa3b96f94",
+        "token1": "0xb42274bbc44ffcacd746a5d5ebe7fcabfd9b53be",
+        "fee": 3000,
+        "sqrtPriceX96": "79228162514264337593543950336000000",
+        "poolAddress": "0xEDaF665F8b92a0a0D0858480301065C93CeCC85E",
+        "tokenId": "418100",
+        "liquidity": "100000000000000000",
+        "amount0Used": "100000000000",
+        "amount1Used": "100000000000000000000000",
+        "initTx": "0x07dda11e88d406282c51149392c60404bb49667a70aeb61fe8114748cedbb78b",
+        "mintTx": "0x5814450b1cd25146cfd468edeec17520df4da9150ef437928537539542e93b52"
+      },
+      "FL": {
+        "state": "FL",
+        "pair": "FLT-USDC",
+        "token0": "0x03d93986991d5ee4c43528f02bffad1a54172c0e",
+        "token1": "0x462b31b02e00d0dec2aeb79437e20e9fa3b96f94",
+        "fee": 3000,
+        "sqrtPriceX96": "79228162514264337593543",
+        "poolAddress": "0x34d8357bae6B0E3D4d67201fA677cAb18c6BdA86",
+        "tokenId": "418097",
+        "liquidity": "99999999999999999",
+        "amount0Used": "99999999999999999000002",
+        "amount1Used": "100000000000",
+        "initTx": "0x16bf48d00a49f07031f69f9f269173335fd5e4df8a346656dbaa4b5f72a1bd0b",
+        "mintTx": "0x4c9731d44404a95919ea4b97ee840e230dc6f3ff4fe61e800cc483e5094d7d98"
+      }
+    }
+  },
+  "seededAt": "2026-04-28T21:43:21.705Z"
 }

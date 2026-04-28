@@ -84,6 +84,29 @@ export const negotiateSwapMessageSchema = z.discriminatedUnion('kind', [
 ]);
 export type NegotiateSwapMessage = z.infer<typeof negotiateSwapMessageSchema>;
 
+/**
+ * Per-side execution leg. Phase 3 fires two of these per bilateral swap:
+ * the responder's leg ships inside the Completed settlement payload, the
+ * initiator's leg fires after the initiator observes Completed in their
+ * own process and is recorded in their local memory log.
+ */
+export const swapTxLegSchema = z.object({
+  fips: fipsSchema,
+  swapper_address: z.string(),
+  token_in_symbol: z.string(),
+  token_in_address: z.string(),
+  token_out_symbol: z.string(),
+  token_out_address: z.string(),
+  amount_in: z.string(),
+  expected_amount_out: z.string(),
+  tx_hash: z.string(),
+  block_number: z.string(),
+  status: z.enum(['success', 'reverted']),
+  quote_request_id: z.string(),
+  swap_request_id: z.string(),
+});
+export type SwapTxLeg = z.infer<typeof swapTxLegSchema>;
+
 /** Final settlement record emitted on Completed terminal state. */
 export const swapSettlementSchema = z.object({
   kind: z.literal('settlement'),
@@ -92,7 +115,20 @@ export const swapSettlementSchema = z.object({
   agreed_give: assetAmountSchema,
   agreed_receive: assetAmountSchema,
   rounds: z.number().int().min(1),
-  // Phase 3 will populate `tx_hash` after Uniswap execution.
+  /**
+   * Two-leg execution record. Each side fires its own Uniswap Trading API
+   * swap; the responder's leg is populated synchronously inside the
+   * Completed handler, while the initiator's leg is appended in the
+   * initiator's process and surfaces in their memory log only.
+   */
+  legs: z.object({
+    initiator: swapTxLegSchema.nullable(),
+    responder: swapTxLegSchema.nullable(),
+  }),
+  /**
+   * Legacy single-tx-hash field for Phase 1/2 callers. Populated with the
+   * responder's tx hash if present, else the initiator's, else null.
+   */
   tx_hash: z.string().nullable(),
   settled_at: z.string(),
 });

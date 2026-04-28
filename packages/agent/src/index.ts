@@ -23,6 +23,7 @@ import { AxlClient } from './axl-client.ts';
 import { describeAgent, loadConfig } from './config.ts';
 import { DataPlaneClient } from './data-plane-client.ts';
 import { MeshDiscovery } from './discovery.ts';
+import { SwapExecutor } from './execute.ts';
 import { McpRouterClient } from './mcp-router-client.ts';
 import { makeMcpRequestHandler } from './mcp/server.ts';
 import { makeMemory } from './memory.ts';
@@ -60,6 +61,29 @@ if (cfg.reasoningEnabled) {
   }
 } else {
   console.log(`[${cfg.state.abbr}] OpenRouter disabled — using deterministic fallback paths`);
+}
+
+let swapExecutor: SwapExecutor | undefined;
+if (cfg.settlement.enabled && cfg.settlement.walletPrivateKey) {
+  try {
+    swapExecutor = new SwapExecutor({
+      privateKey: cfg.settlement.walletPrivateKey,
+      apiKey: cfg.settlement.uniswapApiKey,
+      chainId: cfg.settlement.chainId,
+      rpc: cfg.settlement.rpc,
+    });
+    console.log(
+      `[${cfg.state.abbr}] settlement wired: ${swapExecutor.address} on chain ${cfg.settlement.chainId}`,
+    );
+  } catch (err) {
+    console.warn(
+      `[${cfg.state.abbr}] SwapExecutor init failed (${String(err)}); negotiations will complete without onchain legs`,
+    );
+  }
+} else {
+  console.log(
+    `[${cfg.state.abbr}] settlement disabled — negotiations complete with legs.responder=null`,
+  );
 }
 
 console.log(`[${cfg.state.abbr}] starting agent: ${describeAgent(cfg)}`);
@@ -117,8 +141,8 @@ console.log(
   `[${cfg.state.abbr}]   Registered "${cfg.mcp.serviceName}" with router at ${cfg.mcp.routerUrl}`,
 );
 
-// 6. Start A2A server (now reasoner-aware).
-const a2a = startA2aServer(cfg, state, reasoner, systemPrompt);
+// 6. Start A2A server (now reasoner-aware + Phase 3 swap-executor-aware).
+const a2a = startA2aServer(cfg, state, reasoner, systemPrompt, swapExecutor);
 
 // 7. Discovery loop.
 discovery.start(10_000);

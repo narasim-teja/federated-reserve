@@ -29,12 +29,19 @@ import {
   type ShockContribution,
   type SwapCounter,
   type SwapSettlement,
+  type SwapTxLeg,
   getPersona,
+  getStateToken,
+  getUsdc,
   hasCoalitionAffinity,
+  loadDeployments,
+  lookupStateByFips,
   negotiateSwapMessageSchema,
+  resolveAsset,
   skillEnvelopeSchema,
 } from '@federated-reserve/shared';
 import type { AgentConfig } from '../config.ts';
+import type { SwapExecutor } from '../execute.ts';
 import type { Reasoner } from '../reason.ts';
 import type { AgentState } from '../state.ts';
 
@@ -67,6 +74,7 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     private readonly state: AgentState,
     private readonly reasoner?: Reasoner,
     private readonly systemPrompt: string = '',
+    private readonly swapExecutor?: SwapExecutor,
   ) {}
 
   async cancelTask(taskId: string, eventBus: ExecutionEventBus): Promise<void> {
@@ -159,7 +167,7 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
         return;
       }
       if (decision.action === 'accept') {
-        const settlement = this.makeSettlement(
+        const settlement = await this.makeSettlement(
           incoming.initiator_fips,
           incoming.give,
           incoming.receive,
@@ -212,7 +220,7 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       return;
     }
     if (incoming.kind === 'accept') {
-      const settlement = this.makeSettlement(
+      const settlement = await this.makeSettlement(
         this.findInitiatorFips(ctx.task),
         incoming.agreed_give,
         incoming.agreed_receive,
@@ -248,7 +256,7 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
         this.failTask(ctx, bus, `counter rejected: ${decision.rationale}`);
         return;
       }
-      const settlement = this.makeSettlement(
+      const settlement = await this.makeSettlement(
         this.findInitiatorFips(ctx.task),
         incoming.give,
         incoming.receive,
@@ -725,12 +733,22 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     return parts.length ? parts.join(', ') : '(empty snapshot)';
   }
 
-  private makeSettlement(
+  /**
+   * Build the settlement payload. Phase 3: when a SwapExecutor is configured
+   * AND the agreed assets resolve to a (USDC × StateToken) pool we hold on
+   * Unichain Sepolia, the responder fires its mirror leg here (USDC →
+   * initiator's StateToken) before emitting Completed.
+   *
+   * Failure of the on-chain leg does NOT fail the negotiation — the task
+   * still completes; `legs.responder` is null and a warning is logged.
+   */
+  private async makeSettlement(
     initiatorFips: number,
     agreedGive: AssetAmount,
     agreedReceive: AssetAmount,
     rounds: number,
-  ): SwapSettlement {
+  ): Promise<SwapSettlement> {
+    const responderLeg = await this.executeResponderLeg(initiatorFips, agreedGive, agreedReceive);
     return {
       kind: 'settlement',
       initiator_fips: initiatorFips,
@@ -738,9 +756,140 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       agreed_give: agreedGive,
       agreed_receive: agreedReceive,
       rounds,
-      tx_hash: null,
+      legs: { initiator: null, responder: responderLeg },
+      tx_hash: responderLeg?.tx_hash ?? null,
       settled_at: isoNow(),
     };
+  }
+
+  /**
+   * Phase 3 — execute responder's mirror leg of the bilateral swap.
+   *
+   * Mapping:
+   *   initiator gives `agreed_give` (e.g. 1M USDC)
+   *   initiator receives `agreed_receive` (e.g. 1M responder's StateToken)
+   *   responder mirrors: spend matching USDC for initiator's StateToken
+   *
+   * The mirror amount equals `agreed_give.amount` when `agreed_give.asset`
+   * is USDC (the natural Phase 3 case). If neither side is USDC, we skip
+   * on-chain execution because we don't have state×state pools.
+   */
+  private async executeResponderLeg(
+    initiatorFips: number,
+    agreedGive: AssetAmount,
+    agreedReceive: AssetAmount,
+  ): Promise<SwapTxLeg | null> {
+    if (!this.swapExecutor || !this.cfg.settlement.enabled) return null;
+
+    const initiator = lookupStateByFips(initiatorFips);
+    if (!initiator) {
+      console.warn(
+        `[${this.cfg.state.abbr}] settlement skip: unknown initiator FIPS ${initiatorFips}`,
+      );
+      return null;
+    }
+
+    let deployments: ReturnType<typeof loadDeployments>;
+    try {
+      deployments = loadDeployments('unichain-sepolia');
+    } catch (err) {
+      console.warn(
+        `[${this.cfg.state.abbr}] settlement skip: deployments unavailable (${String(err)})`,
+      );
+      return null;
+    }
+
+    // Resolve negotiation assets to on-chain tokens.
+    let giveTok: ReturnType<typeof getUsdc>;
+    let recvTok: ReturnType<typeof getUsdc>;
+    try {
+      giveTok = resolveAsset(deployments, agreedGive.asset);
+      recvTok = resolveAsset(deployments, agreedReceive.asset);
+    } catch (err) {
+      console.warn(
+        `[${this.cfg.state.abbr}] settlement skip: cannot resolve assets ${agreedGive.asset}/${agreedReceive.asset} (${String(err)})`,
+      );
+      return null;
+    }
+
+    // We require one side to be USDC so we can route through our seeded
+    // USDC×StateToken pools. Phase 3 only seeds 5 such pools.
+    const usdc = getUsdc(deployments);
+    const giveIsUsdc = giveTok.address.toLowerCase() === usdc.address.toLowerCase();
+    const recvIsUsdc = recvTok.address.toLowerCase() === usdc.address.toLowerCase();
+    if (!giveIsUsdc && !recvIsUsdc) {
+      console.warn(
+        `[${this.cfg.state.abbr}] settlement skip: neither side is USDC (give=${agreedGive.asset}, recv=${agreedReceive.asset})`,
+      );
+      return null;
+    }
+
+    // Responder's mirror leg: spend USDC equal to initiator's USDC commitment,
+    // buy initiator's StateToken. If the initiator was *receiving* USDC
+    // (their StateToken is the give-side), we mirror by acquiring it too —
+    // the same pool clears either direction.
+    let initiatorStateTok: ReturnType<typeof getUsdc>;
+    try {
+      initiatorStateTok = getStateToken(deployments, initiator.abbr);
+    } catch {
+      console.warn(
+        `[${this.cfg.state.abbr}] settlement skip: no StateToken deployed for initiator ${initiator.abbr}`,
+      );
+      return null;
+    }
+
+    // Amount of USDC the responder will spend mirrors what the initiator
+    // committed in USDC terms (the `agreed_give.amount` when give is USDC).
+    const mirrorUsdcAmount = giveIsUsdc ? agreedGive.amount : agreedReceive.amount;
+    let amountIn: bigint;
+    try {
+      amountIn = BigInt(mirrorUsdcAmount);
+    } catch {
+      console.warn(
+        `[${this.cfg.state.abbr}] settlement skip: bad mirror amount ${mirrorUsdcAmount}`,
+      );
+      return null;
+    }
+    if (amountIn === 0n) {
+      console.warn(`[${this.cfg.state.abbr}] settlement skip: mirror amount is zero`);
+      return null;
+    }
+
+    console.log(
+      `[${this.cfg.state.abbr}] settlement: responder leg — buying ${initiatorStateTok.symbol} with ${amountIn} USDC base units (initiator=${initiator.abbr})`,
+    );
+
+    try {
+      const result = await this.swapExecutor.swap({
+        tokenIn: usdc.address,
+        tokenOut: initiatorStateTok.address,
+        amount: amountIn,
+        slippageTolerancePct: 1.0,
+      });
+      console.log(
+        `[${this.cfg.state.abbr}]   ✓ responder swap tx=${result.txHash} block=${result.blockNumber} expectedOut=${result.expectedOut}`,
+      );
+      return {
+        fips: this.cfg.state.fips,
+        swapper_address: this.swapExecutor.address,
+        token_in_symbol: usdc.symbol,
+        token_in_address: usdc.address,
+        token_out_symbol: initiatorStateTok.symbol,
+        token_out_address: initiatorStateTok.address,
+        amount_in: amountIn.toString(),
+        expected_amount_out: result.expectedOut.toString(),
+        tx_hash: result.txHash,
+        block_number: result.blockNumber.toString(),
+        status: result.status,
+        quote_request_id: result.quoteRequestId,
+        swap_request_id: result.swapRequestId,
+      };
+    } catch (err) {
+      console.warn(
+        `[${this.cfg.state.abbr}]   responder swap FAILED: ${(err as Error).message}`,
+      );
+      return null;
+    }
   }
 
   private dataMessage(ctx: RequestContext, payload: unknown): Message {
