@@ -1,40 +1,45 @@
 /**
- * AgentExecutor for the negotiate-bilateral-swap skill.
+ * AgentExecutor — top-level dispatcher.
  *
- * Phase 1 ships deterministic stub logic so the lifecycle is reproducible
- * without OpenRouter calls — Phase 2 swaps this for a Claude-powered policy.
+ * Routes inbound A2A messages to a per-skill handler. Two dispatch modes:
  *
- * Lifecycle (single conversation, two `message/send` calls from the client):
+ *   1. Legacy (Phase 1 backward compat): if the inbound message's DataPart
+ *      doesn't have a `skill` field but does have one of the
+ *      negotiate-bilateral-swap `kind`s (proposal/counter/accept/reject),
+ *      route to `handleNegotiateSwap`. This keeps `scripts/test-a2a-negotiate.sh`
+ *      green without modification.
  *
- *   call 1 (initiator → us):  proposal { give, receive }
- *     → we publish Task (working)
- *     → we publish TaskStatusUpdateEvent (input-required, final=false)
- *       carrying a Message kind=counter with a 5% haircut on `receive`
+ *   2. Skill envelope (Phase 2+): if the DataPart has a top-level `skill`
+ *      field, route by that. The four new skills (coalition, bond, aid,
+ *      shock) live behind this branch.
  *
- *   call 2 (initiator → us):  accept { agreed_give, agreed_receive }
- *     → we publish TaskStatusUpdateEvent (completed, final=true)
- *       carrying a Message kind=settlement with the agreed terms and
- *       the round count.
- *
- * Edge cases:
- *   - reject from initiator   → completed=failed, final=true
- *   - second counter received → we accept it deterministically (test still
- *     converges in 2 rounds)
- *   - any unparseable payload → failed, final=true
+ * All handlers share the helpers at the bottom (failTask, settlement
+ * messaging, persona context).
  */
 
 import { randomUUID } from 'node:crypto';
-import type { AgentExecutor, ExecutionEventBus, RequestContext } from '@a2a-js/sdk/server';
 import type { DataPart, Message, Task, TaskStatusUpdateEvent } from '@a2a-js/sdk';
+import type { AgentExecutor, ExecutionEventBus, RequestContext } from '@a2a-js/sdk/server';
 import {
+  type AidResponse,
   type AssetAmount,
-  negotiateSwapMessageSchema,
+  type BondAward,
+  type CoalitionResponse,
+  type EconomicIndicatorKind,
+  type ShockContribution,
   type SwapCounter,
   type SwapSettlement,
+  getPersona,
+  hasCoalitionAffinity,
+  negotiateSwapMessageSchema,
+  skillEnvelopeSchema,
 } from '@federated-reserve/shared';
 import type { AgentConfig } from '../config.ts';
+import type { Reasoner } from '../reason.ts';
+import type { AgentState } from '../state.ts';
 
-/** Bigint-as-string × bps haircut, returning a fresh string. */
+const MAX_NEGOTIATION_ROUNDS = 3;
+
 function applyBpsHaircut(amount: string, bps: number): string {
   const big = BigInt(amount);
   const haircut = (big * BigInt(10_000 - bps)) / 10_000n;
@@ -49,30 +54,77 @@ function isoNow(): string {
   return new Date().toISOString();
 }
 
+interface ReasonerDecision {
+  action: 'accept' | 'counter' | 'reject';
+  give?: AssetAmount;
+  receive?: AssetAmount;
+  rationale: string;
+}
+
 export class FederatedReserveAgentExecutor implements AgentExecutor {
-  constructor(private readonly cfg: AgentConfig) {}
+  constructor(
+    private readonly cfg: AgentConfig,
+    private readonly state: AgentState,
+    private readonly reasoner?: Reasoner,
+    private readonly systemPrompt: string = '',
+  ) {}
 
   async cancelTask(taskId: string, eventBus: ExecutionEventBus): Promise<void> {
-    const update: TaskStatusUpdateEvent = {
+    eventBus.publish({
       kind: 'status-update',
       taskId,
-      contextId: taskId, // best-effort if we don't have the contextId here
+      contextId: taskId,
       status: { state: 'canceled', timestamp: isoNow() },
       final: true,
-    };
-    eventBus.publish(update);
+    } satisfies TaskStatusUpdateEvent);
     eventBus.finished();
   }
 
   async execute(ctx: RequestContext, bus: ExecutionEventBus): Promise<void> {
-    const userMessage = ctx.userMessage;
-    const dataPart = findDataPart(userMessage);
-
+    const dataPart = findDataPart(ctx.userMessage);
     if (!dataPart) {
-      this.failTask(ctx, bus, 'no DataPart in user message — expected negotiation envelope');
+      this.failTask(ctx, bus, 'no DataPart in user message');
       return;
     }
+    const data = dataPart.data as Record<string, unknown>;
 
+    // Branch 2: skill envelope
+    if (typeof data.skill === 'string') {
+      const parsed = skillEnvelopeSchema.safeParse(data);
+      if (!parsed.success) {
+        this.failTask(ctx, bus, `invalid skill envelope: ${parsed.error.message}`);
+        return;
+      }
+      const env = parsed.data;
+      switch (env.skill) {
+        case 'participate-in-coalition':
+          await this.handleCoalitionInvite(ctx, bus, env);
+          return;
+        case 'bond-auction':
+          await this.handleBondBid(ctx, bus, env);
+          return;
+        case 'request-emergency-aid':
+          await this.handleAidRequest(ctx, bus, env);
+          return;
+        case 'coordinate-shock-response':
+          await this.handleShockSignal(ctx, bus, env);
+          return;
+      }
+    }
+
+    // Branch 1: legacy negotiate-bilateral-swap (no top-level skill field)
+    await this.handleNegotiateSwap(ctx, bus, dataPart);
+  }
+
+  // ========================================================================
+  // negotiate-bilateral-swap (Phase 1 + Phase 2 reasoning)
+  // ========================================================================
+
+  private async handleNegotiateSwap(
+    ctx: RequestContext,
+    bus: ExecutionEventBus,
+    dataPart: DataPart,
+  ): Promise<void> {
     const parsed = negotiateSwapMessageSchema.safeParse(dataPart.data);
     if (!parsed.success) {
       this.failTask(ctx, bus, `invalid negotiation payload: ${parsed.error.message}`);
@@ -81,126 +133,628 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     const incoming = parsed.data;
 
     if (!ctx.task) {
-      // First turn — must be a proposal.
       if (incoming.kind !== 'proposal') {
         this.failTask(ctx, bus, `first message must be a proposal, got ${incoming.kind}`);
         return;
       }
-      const counterTerms = this.computeCounter(incoming.give, incoming.receive);
 
-      // 1. Publish the canonical Task snapshot (working).
+      const decision = await this.decideOnProposal(
+        incoming.give,
+        incoming.receive,
+        incoming.rationale,
+        1,
+      );
+
       const task: Task = {
         kind: 'task',
         id: ctx.taskId,
         contextId: ctx.contextId,
         status: { state: 'working', timestamp: isoNow() },
-        history: [userMessage],
+        history: [ctx.userMessage],
       };
       bus.publish(task);
 
-      // 2. Publish input-required with our counter as the status message.
-      const counterMessage: Message = {
-        kind: 'message',
-        messageId: randomUUID(),
-        role: 'agent',
-        taskId: ctx.taskId,
-        contextId: ctx.contextId,
-        parts: [
-          {
-            kind: 'data',
-            data: {
-              kind: 'counter',
-              responder_fips: this.cfg.state.fips,
-              give: counterTerms.give,
-              receive: counterTerms.receive,
-              rationale: `${this.cfg.state.abbr} counter: 500bps haircut on receive leg vs initial proposal.`,
-            } satisfies SwapCounter,
+      if (decision.action === 'reject') {
+        this.publishStatus(ctx, bus, 'failed', `rejected: ${decision.rationale}`, true);
+        return;
+      }
+      if (decision.action === 'accept') {
+        const settlement = this.makeSettlement(
+          incoming.initiator_fips,
+          incoming.give,
+          incoming.receive,
+          1,
+        );
+        bus.publish({
+          kind: 'status-update',
+          taskId: ctx.taskId,
+          contextId: ctx.contextId,
+          status: {
+            state: 'completed',
+            message: this.dataMessage(ctx, settlement),
+            timestamp: isoNow(),
           },
-        ],
+          final: true,
+        } satisfies TaskStatusUpdateEvent);
+        bus.finished();
+        return;
+      }
+
+      const counter: SwapCounter = {
+        kind: 'counter',
+        responder_fips: this.cfg.state.fips,
+        give: decision.give ?? {
+          asset: incoming.receive.asset,
+          amount: applyBpsHaircut(incoming.receive.amount, 500),
+        },
+        receive: decision.receive ?? incoming.give,
+        rationale: decision.rationale,
       };
-      const update: TaskStatusUpdateEvent = {
+      bus.publish({
         kind: 'status-update',
         taskId: ctx.taskId,
         contextId: ctx.contextId,
         status: {
           state: 'input-required',
-          message: counterMessage,
+          message: this.dataMessage(ctx, counter),
           timestamp: isoNow(),
         },
         final: false,
-      };
-      bus.publish(update);
+      } satisfies TaskStatusUpdateEvent);
       bus.finished();
       return;
     }
 
-    // Continuation turn — task already exists.
-    const rounds = (ctx.task.history?.length ?? 0); // includes the new user message
+    // Continuation
+    const rounds = ctx.task.history?.length ?? 1;
     if (incoming.kind === 'reject') {
       this.failTask(ctx, bus, `initiator rejected: ${incoming.reason}`);
       return;
     }
-
-    let agreedGive: AssetAmount;
-    let agreedReceive: AssetAmount;
     if (incoming.kind === 'accept') {
-      agreedGive = incoming.agreed_give;
-      agreedReceive = incoming.agreed_receive;
-    } else if (incoming.kind === 'counter') {
-      // Deterministic: accept any counter-counter on round 2.
-      agreedGive = incoming.give;
-      agreedReceive = incoming.receive;
-    } else {
-      this.failTask(ctx, bus, `unexpected continuation kind: ${incoming.kind}`);
+      const settlement = this.makeSettlement(
+        this.findInitiatorFips(ctx.task),
+        incoming.agreed_give,
+        incoming.agreed_receive,
+        rounds,
+      );
+      bus.publish({
+        kind: 'status-update',
+        taskId: ctx.taskId,
+        contextId: ctx.contextId,
+        status: {
+          state: 'completed',
+          message: this.dataMessage(ctx, settlement),
+          timestamp: isoNow(),
+        },
+        final: true,
+      } satisfies TaskStatusUpdateEvent);
+      bus.finished();
+      return;
+    }
+    if (incoming.kind === 'counter') {
+      let decision: ReasonerDecision;
+      if (rounds >= MAX_NEGOTIATION_ROUNDS) {
+        decision = { action: 'accept', rationale: 'round cap reached, accepting' };
+      } else {
+        decision = await this.decideOnCounter(
+          incoming.give,
+          incoming.receive,
+          incoming.rationale,
+          rounds,
+        );
+      }
+      if (decision.action === 'reject') {
+        this.failTask(ctx, bus, `counter rejected: ${decision.rationale}`);
+        return;
+      }
+      const settlement = this.makeSettlement(
+        this.findInitiatorFips(ctx.task),
+        incoming.give,
+        incoming.receive,
+        rounds,
+      );
+      bus.publish({
+        kind: 'status-update',
+        taskId: ctx.taskId,
+        contextId: ctx.contextId,
+        status: {
+          state: 'completed',
+          message: this.dataMessage(ctx, settlement),
+          timestamp: isoNow(),
+        },
+        final: true,
+      } satisfies TaskStatusUpdateEvent);
+      bus.finished();
       return;
     }
 
-    const settlement: SwapSettlement = {
+    this.failTask(ctx, bus, `unexpected continuation kind: ${(incoming as { kind: string }).kind}`);
+  }
+
+  private async decideOnProposal(
+    give: AssetAmount,
+    receive: AssetAmount,
+    rationale: string,
+    round: number,
+  ): Promise<ReasonerDecision> {
+    if (this.reasoner && this.cfg.reasoningEnabled) {
+      try {
+        return await this.askSwapReasoner({
+          phase: 'proposal',
+          their_give: give,
+          their_receive: receive,
+          their_rationale: rationale,
+          round,
+        });
+      } catch (err) {
+        console.warn(
+          `[${this.cfg.state.abbr}] reasoner failed on proposal (${String(err)}); using deterministic counter`,
+        );
+      }
+    }
+    return {
+      action: 'counter',
+      give: { asset: receive.asset, amount: applyBpsHaircut(receive.amount, 500) },
+      receive: give,
+      rationale: `${this.cfg.state.abbr} counter: 500bps haircut on receive leg vs initial proposal.`,
+    };
+  }
+
+  private async decideOnCounter(
+    give: AssetAmount,
+    receive: AssetAmount,
+    rationale: string,
+    round: number,
+  ): Promise<ReasonerDecision> {
+    if (this.reasoner && this.cfg.reasoningEnabled) {
+      try {
+        return await this.askSwapReasoner({
+          phase: 'counter',
+          their_give: give,
+          their_receive: receive,
+          their_rationale: rationale,
+          round,
+        });
+      } catch (err) {
+        console.warn(
+          `[${this.cfg.state.abbr}] reasoner failed on counter (${String(err)}); accepting deterministically`,
+        );
+      }
+    }
+    return { action: 'accept', rationale: 'deterministic fallback: accept after round 2' };
+  }
+
+  private async askSwapReasoner(args: {
+    phase: 'proposal' | 'counter';
+    their_give: AssetAmount;
+    their_receive: AssetAmount;
+    their_rationale: string;
+    round: number;
+  }): Promise<ReasonerDecision> {
+    const userMessage = [
+      `Skill: negotiate-bilateral-swap. Round ${args.round} of ${MAX_NEGOTIATION_ROUNDS}.`,
+      this.treasuryContextLine(),
+      `Latest indicators: ${this.recentIndicatorsSummary()}`,
+      args.phase === 'proposal'
+        ? 'A counterparty has sent you a swap PROPOSAL. They want to give you `their_give` in exchange for receiving `their_receive` from you.'
+        : 'A counterparty has sent you a COUNTER. The terms below are what they now propose; you may accept, counter-counter, or reject.',
+      `Their offer: their_give=${JSON.stringify(args.their_give)}, their_receive=${JSON.stringify(args.their_receive)}`,
+      `Their rationale: ${args.their_rationale}`,
+      '',
+      'Decide. Respond ONLY with a JSON object of the shape:',
+      '{ "action": "accept" | "counter" | "reject",',
+      '  "give": { "asset": string, "amount": "<bigint-as-string>" } | null,',
+      '  "receive": { "asset": string, "amount": "<bigint-as-string>" } | null,',
+      '  "rationale": "<one short sentence>" }',
+      '',
+      'If action="counter", include `give` and `receive` (your terms). Use the same asset symbols. Keep amount as a numeric string of integer base units.',
+      'If action="accept" or "reject", set give and receive to null.',
+    ].join('\n');
+
+    if (!this.reasoner) throw new Error('reasoner not configured');
+    const result = await this.reasoner.reasonJson<ReasonerDecision>({
+      tier: this.cfg.state.tier,
+      system: this.systemPrompt,
+      messages: [{ role: 'user', content: userMessage }],
+    });
+    return result.value;
+  }
+
+  // ========================================================================
+  // participate-in-coalition (Phase 2 single-round)
+  // ========================================================================
+
+  private async handleCoalitionInvite(
+    ctx: RequestContext,
+    bus: ExecutionEventBus,
+    env: Extract<
+      import('@federated-reserve/shared').SkillEnvelope,
+      { skill: 'participate-in-coalition' }
+    >,
+  ): Promise<void> {
+    bus.publish({
+      kind: 'task',
+      id: ctx.taskId,
+      contextId: ctx.contextId,
+      status: { state: 'working', timestamp: isoNow() },
+      history: [ctx.userMessage],
+    } satisfies Task);
+
+    const affinity = hasCoalitionAffinity(this.cfg.state.abbr, env.coalition_tag);
+
+    let response: CoalitionResponse;
+    if (this.reasoner && this.cfg.reasoningEnabled) {
+      try {
+        const prompt = [
+          'Skill: participate-in-coalition. A peer is inviting you to join a coalition.',
+          `Coalition tag: ${env.coalition_tag}. Topic: "${env.topic}". Proposed contribution: $${env.proposed_contribution_usd}.`,
+          this.treasuryContextLine(),
+          'Decide whether to join. Respond ONLY with JSON:',
+          '{ "kind": "joined" | "declined", "contribution_usd": <number>, "rationale": "<one sentence>" }',
+          'If joining, contribution_usd may match or differ from proposal. If declining, set contribution_usd to 0.',
+        ].join('\n');
+        const result = await this.reasoner.reasonJson<{
+          kind: 'joined' | 'declined';
+          contribution_usd: number;
+          rationale: string;
+        }>({
+          tier: this.cfg.state.tier,
+          system: this.systemPrompt,
+          messages: [{ role: 'user', content: prompt }],
+        });
+        response = {
+          skill: 'participate-in-coalition',
+          kind: result.value.kind,
+          responder_fips: this.cfg.state.fips,
+          contribution_usd: result.value.contribution_usd,
+          rationale: result.value.rationale,
+        };
+      } catch (err) {
+        console.warn(`[${this.cfg.state.abbr}] coalition reasoner failed; using affinity fallback`);
+        response = this.coalitionFallback(env, affinity);
+      }
+    } else {
+      response = this.coalitionFallback(env, affinity);
+    }
+
+    bus.publish({
+      kind: 'status-update',
+      taskId: ctx.taskId,
+      contextId: ctx.contextId,
+      status: { state: 'completed', message: this.dataMessage(ctx, response), timestamp: isoNow() },
+      final: true,
+    } satisfies TaskStatusUpdateEvent);
+    bus.finished();
+  }
+
+  private coalitionFallback(
+    env: Extract<
+      import('@federated-reserve/shared').SkillEnvelope,
+      { skill: 'participate-in-coalition' }
+    >,
+    affinity: boolean,
+  ): CoalitionResponse {
+    return {
+      skill: 'participate-in-coalition',
+      kind: affinity ? 'joined' : 'declined',
+      responder_fips: this.cfg.state.fips,
+      contribution_usd: affinity ? env.proposed_contribution_usd : 0,
+      rationale: affinity
+        ? `${this.cfg.state.abbr} joins on natural affinity with ${env.coalition_tag}.`
+        : `${this.cfg.state.abbr} declines: no affinity with ${env.coalition_tag}.`,
+    };
+  }
+
+  // ========================================================================
+  // bond-auction (Phase 2 single-round; Phase 3 expands)
+  // ========================================================================
+
+  private async handleBondBid(
+    ctx: RequestContext,
+    bus: ExecutionEventBus,
+    env: Extract<import('@federated-reserve/shared').SkillEnvelope, { skill: 'bond-auction' }>,
+  ): Promise<void> {
+    // We are the issuer. The bidder has submitted a bid. We decide award/reject.
+    bus.publish({
+      kind: 'task',
+      id: ctx.taskId,
+      contextId: ctx.contextId,
+      status: { state: 'working', timestamp: isoNow() },
+      history: [ctx.userMessage],
+    } satisfies Task);
+
+    let award: BondAward;
+    if (this.reasoner && this.cfg.reasoningEnabled) {
+      try {
+        const prompt = [
+          `Skill: bond-auction (you are the issuer of bond ${env.bond_id}).`,
+          `A peer (FIPS ${env.bidder_fips}) has bid: principal=$${env.principal_usd}, yield=${env.bid_yield_bps}bps. Their rationale: "${env.rationale}".`,
+          this.treasuryContextLine(),
+          'Decide whether to award the bid. Lower yield is better for issuer.',
+          'Respond ONLY with JSON: { "kind": "awarded" | "rejected", "yield_bps": <int>, "rationale": "<one sentence>" }',
+          'If awarded, yield_bps should equal the bid yield. If rejected, yield_bps may be your minimum-acceptable yield.',
+        ].join('\n');
+        const result = await this.reasoner.reasonJson<{
+          kind: 'awarded' | 'rejected';
+          yield_bps: number;
+          rationale: string;
+        }>({
+          tier: this.cfg.state.tier,
+          system: this.systemPrompt,
+          messages: [{ role: 'user', content: prompt }],
+        });
+        award = {
+          skill: 'bond-auction',
+          kind: result.value.kind,
+          bond_id: env.bond_id,
+          to_fips: env.bidder_fips,
+          yield_bps: result.value.yield_bps,
+          rationale: result.value.rationale,
+        };
+      } catch (err) {
+        console.warn(`[${this.cfg.state.abbr}] bond reasoner failed; using deterministic accept`);
+        award = this.bondFallback(env);
+      }
+    } else {
+      award = this.bondFallback(env);
+    }
+
+    bus.publish({
+      kind: 'status-update',
+      taskId: ctx.taskId,
+      contextId: ctx.contextId,
+      status: { state: 'completed', message: this.dataMessage(ctx, award), timestamp: isoNow() },
+      final: true,
+    } satisfies TaskStatusUpdateEvent);
+    bus.finished();
+  }
+
+  private bondFallback(
+    env: Extract<import('@federated-reserve/shared').SkillEnvelope, { skill: 'bond-auction' }>,
+  ): BondAward {
+    // Deterministic: accept any bid <= 800 bps yield (rough credit guardrail).
+    const ok = env.bid_yield_bps <= 800;
+    return {
+      skill: 'bond-auction',
+      kind: ok ? 'awarded' : 'rejected',
+      bond_id: env.bond_id,
+      to_fips: env.bidder_fips,
+      yield_bps: env.bid_yield_bps,
+      rationale: ok
+        ? `${this.cfg.state.abbr} accepts ${env.bid_yield_bps}bps yield.`
+        : `${this.cfg.state.abbr} rejects ${env.bid_yield_bps}bps as too high.`,
+    };
+  }
+
+  // ========================================================================
+  // request-emergency-aid (Phase 2 single-round)
+  // ========================================================================
+
+  private async handleAidRequest(
+    ctx: RequestContext,
+    bus: ExecutionEventBus,
+    env: Extract<
+      import('@federated-reserve/shared').SkillEnvelope,
+      { skill: 'request-emergency-aid' }
+    >,
+  ): Promise<void> {
+    bus.publish({
+      kind: 'task',
+      id: ctx.taskId,
+      contextId: ctx.contextId,
+      status: { state: 'working', timestamp: isoNow() },
+      history: [ctx.userMessage],
+    } satisfies Task);
+
+    let response: AidResponse;
+    if (this.reasoner && this.cfg.reasoningEnabled) {
+      try {
+        const prompt = [
+          'Skill: request-emergency-aid (you are evaluating an aid request from a peer).',
+          `Requester FIPS ${env.requester_fips} asks for $${env.amount_usd}. Reason: "${env.reason}". Repayment terms: "${env.repayment_terms}".`,
+          this.treasuryContextLine(),
+          'Decide whether to offer aid (full, partial, or decline).',
+          'Respond ONLY with JSON: { "kind": "offered" | "declined", "amount_usd": <number>, "yield_bps": <int>, "rationale": "<one sentence>" }',
+          'If declining, amount_usd=0 and yield_bps=0. If offering, amount_usd ≤ requested, yield_bps reflects pricing.',
+        ].join('\n');
+        const result = await this.reasoner.reasonJson<{
+          kind: 'offered' | 'declined';
+          amount_usd: number;
+          yield_bps: number;
+          rationale: string;
+        }>({
+          tier: this.cfg.state.tier,
+          system: this.systemPrompt,
+          messages: [{ role: 'user', content: prompt }],
+        });
+        response = {
+          skill: 'request-emergency-aid',
+          kind: result.value.kind,
+          responder_fips: this.cfg.state.fips,
+          amount_usd: result.value.amount_usd,
+          yield_bps: result.value.yield_bps,
+          rationale: result.value.rationale,
+        };
+      } catch (err) {
+        console.warn(`[${this.cfg.state.abbr}] aid reasoner failed; using deterministic decline`);
+        response = this.aidFallback(env);
+      }
+    } else {
+      response = this.aidFallback(env);
+    }
+
+    bus.publish({
+      kind: 'status-update',
+      taskId: ctx.taskId,
+      contextId: ctx.contextId,
+      status: { state: 'completed', message: this.dataMessage(ctx, response), timestamp: isoNow() },
+      final: true,
+    } satisfies TaskStatusUpdateEvent);
+    bus.finished();
+  }
+
+  private aidFallback(
+    env: Extract<
+      import('@federated-reserve/shared').SkillEnvelope,
+      { skill: 'request-emergency-aid' }
+    >,
+  ): AidResponse {
+    // Deterministic: offer 25% of request at 600bps if our reserve ratio > 0.10.
+    const able = this.state.reserveRatio > 0.1;
+    return {
+      skill: 'request-emergency-aid',
+      kind: able ? 'offered' : 'declined',
+      responder_fips: this.cfg.state.fips,
+      amount_usd: able ? Math.floor(env.amount_usd * 0.25) : 0,
+      yield_bps: able ? 600 : 0,
+      rationale: able
+        ? `${this.cfg.state.abbr} offers 25% of request at 600bps.`
+        : `${this.cfg.state.abbr} declines: own reserve ratio is too thin.`,
+    };
+  }
+
+  // ========================================================================
+  // coordinate-shock-response (Phase 2 single-round)
+  // ========================================================================
+
+  private async handleShockSignal(
+    ctx: RequestContext,
+    bus: ExecutionEventBus,
+    env: Extract<
+      import('@federated-reserve/shared').SkillEnvelope,
+      { skill: 'coordinate-shock-response' }
+    >,
+  ): Promise<void> {
+    bus.publish({
+      kind: 'task',
+      id: ctx.taskId,
+      contextId: ctx.contextId,
+      status: { state: 'working', timestamp: isoNow() },
+      history: [ctx.userMessage],
+    } satisfies Task);
+
+    const affected = env.affected_fips.includes(this.cfg.state.fips);
+
+    let response: ShockContribution;
+    if (this.reasoner && this.cfg.reasoningEnabled) {
+      try {
+        const prompt = [
+          'Skill: coordinate-shock-response. A peer has signaled a shock and proposed a coordinated response.',
+          `Shock kind: ${env.shock_kind}. Severity: ${env.severity}/10. Affected FIPS: [${env.affected_fips.join(', ')}].`,
+          `Initiator's proposed action: "${env.proposed_action}".`,
+          `You are ${affected ? 'AFFECTED' : 'NOT directly affected'} by this shock.`,
+          this.treasuryContextLine(),
+          'Decide whether to commit capital to the joint response.',
+          'Respond ONLY with JSON: { "kind": "joining" | "abstaining", "commitment_usd": <number>, "rationale": "<one sentence>" }',
+        ].join('\n');
+        const result = await this.reasoner.reasonJson<{
+          kind: 'joining' | 'abstaining';
+          commitment_usd: number;
+          rationale: string;
+        }>({
+          tier: this.cfg.state.tier,
+          system: this.systemPrompt,
+          messages: [{ role: 'user', content: prompt }],
+        });
+        response = {
+          skill: 'coordinate-shock-response',
+          kind: result.value.kind,
+          responder_fips: this.cfg.state.fips,
+          commitment_usd: result.value.commitment_usd,
+          rationale: result.value.rationale,
+        };
+      } catch (err) {
+        console.warn(`[${this.cfg.state.abbr}] shock reasoner failed; using affinity fallback`);
+        response = this.shockFallback(env, affected);
+      }
+    } else {
+      response = this.shockFallback(env, affected);
+    }
+
+    bus.publish({
+      kind: 'status-update',
+      taskId: ctx.taskId,
+      contextId: ctx.contextId,
+      status: { state: 'completed', message: this.dataMessage(ctx, response), timestamp: isoNow() },
+      final: true,
+    } satisfies TaskStatusUpdateEvent);
+    bus.finished();
+  }
+
+  private shockFallback(
+    env: Extract<
+      import('@federated-reserve/shared').SkillEnvelope,
+      { skill: 'coordinate-shock-response' }
+    >,
+    affected: boolean,
+  ): ShockContribution {
+    // Affected states join with severity-scaled commitment; others abstain by default
+    // unless they have natural disaster-pool affinity.
+    const persona = getPersona(this.cfg.state.abbr);
+    const inPool =
+      affected ||
+      persona.coalitions.includes('gulf-disaster-pool') ||
+      persona.coalitions.includes('climate-exposed');
+    return {
+      skill: 'coordinate-shock-response',
+      kind: inPool ? 'joining' : 'abstaining',
+      responder_fips: this.cfg.state.fips,
+      commitment_usd: inPool ? env.severity * 100_000 : 0,
+      rationale: inPool
+        ? `${this.cfg.state.abbr} joins ${env.shock_kind} response (${affected ? 'directly affected' : 'pool affinity'}).`
+        : `${this.cfg.state.abbr} abstains: no direct exposure or affinity.`,
+    };
+  }
+
+  // ========================================================================
+  // shared helpers
+  // ========================================================================
+
+  private treasuryContextLine(): string {
+    return `Your treasury: reserve_ratio=${this.state.reserveRatio}, total_value_usd=${this.state.totalValueUsd}, composition=${JSON.stringify(this.state.composition)}`;
+  }
+
+  private recentIndicatorsSummary(): string {
+    const own = this.state.ownSnapshot?.indicators;
+    if (!own) return '(no snapshot yet)';
+    const parts: string[] = [];
+    for (const [k, v] of Object.entries(own)) {
+      if (v) parts.push(`${k as EconomicIndicatorKind}=${v.value} (${v.observation_date})`);
+    }
+    return parts.length ? parts.join(', ') : '(empty snapshot)';
+  }
+
+  private makeSettlement(
+    initiatorFips: number,
+    agreedGive: AssetAmount,
+    agreedReceive: AssetAmount,
+    rounds: number,
+  ): SwapSettlement {
+    return {
       kind: 'settlement',
-      initiator_fips: this.findInitiatorFips(ctx.task),
+      initiator_fips: initiatorFips,
       responder_fips: this.cfg.state.fips,
       agreed_give: agreedGive,
       agreed_receive: agreedReceive,
       rounds,
-      tx_hash: null, // Phase 3 fills this in after Uniswap execution.
+      tx_hash: null,
       settled_at: isoNow(),
     };
-    const settlementMessage: Message = {
+  }
+
+  private dataMessage(ctx: RequestContext, payload: unknown): Message {
+    return {
       kind: 'message',
       messageId: randomUUID(),
       role: 'agent',
       taskId: ctx.taskId,
       contextId: ctx.contextId,
-      parts: [{ kind: 'data', data: settlement }],
-    };
-    const update: TaskStatusUpdateEvent = {
-      kind: 'status-update',
-      taskId: ctx.taskId,
-      contextId: ctx.contextId,
-      status: { state: 'completed', message: settlementMessage, timestamp: isoNow() },
-      final: true,
-    };
-    bus.publish(update);
-    bus.finished();
-  }
-
-  // ---------- helpers ------------------------------------------------------
-
-  private computeCounter(initiatorGive: AssetAmount, initiatorReceive: AssetAmount): {
-    give: AssetAmount;
-    receive: AssetAmount;
-  } {
-    // We're the responder. Initiator wants to give `initiatorGive` and receive
-    // `initiatorReceive` from us. Our counter reduces what we give back by 5%.
-    const haircutAmount = applyBpsHaircut(initiatorReceive.amount, 500);
-    return {
-      give: { asset: initiatorReceive.asset, amount: haircutAmount },
-      receive: { asset: initiatorGive.asset, amount: initiatorGive.amount },
+      parts: [{ kind: 'data', data: payload as Record<string, unknown> }],
     };
   }
 
   private findInitiatorFips(task: Task): number {
-    // Walk task history for the original proposal; default to 0 if missing.
     for (const msg of task.history ?? []) {
       const dp = findDataPart(msg as Message);
       if (!dp) continue;
@@ -219,28 +773,49 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       role: 'agent',
       taskId: ctx.taskId,
       contextId: ctx.contextId,
-      parts: [{ kind: 'text', text: `negotiate-bilateral-swap failed: ${reason}` }],
+      parts: [{ kind: 'text', text: `task failed: ${reason}` }],
     };
     if (!ctx.task) {
-      // Have to publish a Task first since one doesn't exist.
-      const task: Task = {
+      bus.publish({
         kind: 'task',
         id: ctx.taskId,
         contextId: ctx.contextId,
         status: { state: 'failed', message: failureMessage, timestamp: isoNow() },
         history: [ctx.userMessage],
-      };
-      bus.publish(task);
+      } satisfies Task);
     }
-    const update: TaskStatusUpdateEvent = {
+    bus.publish({
       kind: 'status-update',
       taskId: ctx.taskId,
       contextId: ctx.contextId,
       status: { state: 'failed', message: failureMessage, timestamp: isoNow() },
       final: true,
-    };
-    bus.publish(update);
+    } satisfies TaskStatusUpdateEvent);
     bus.finished();
   }
-}
 
+  private publishStatus(
+    ctx: RequestContext,
+    bus: ExecutionEventBus,
+    state: 'failed' | 'completed' | 'canceled',
+    text: string,
+    final: boolean,
+  ): void {
+    const message: Message = {
+      kind: 'message',
+      messageId: randomUUID(),
+      role: 'agent',
+      taskId: ctx.taskId,
+      contextId: ctx.contextId,
+      parts: [{ kind: 'text', text }],
+    };
+    bus.publish({
+      kind: 'status-update',
+      taskId: ctx.taskId,
+      contextId: ctx.contextId,
+      status: { state, message, timestamp: isoNow() },
+      final,
+    } satisfies TaskStatusUpdateEvent);
+    if (final) bus.finished();
+  }
+}

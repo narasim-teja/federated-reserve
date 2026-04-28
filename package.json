@@ -3,9 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "workspaces": [
-    "packages/*"
-  ],
+  "workspaces": ["packages/*"],
   "scripts": {
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
@@ -13,10 +11,12 @@
     "typecheck": "bun run --filter '*' typecheck",
     "mesh:start": "./scripts/run-local-mesh.sh",
     "mesh:stop": "./scripts/run-local-mesh.sh stop",
+    "data-plane:start": "bun run --filter @federated-reserve/data-plane start",
     "test:unicast": "./scripts/test-mcp-unicast.sh",
     "test:discovery": "./scripts/test-mcp-discovery.sh",
     "test:broadcast": "./scripts/test-mcp-broadcast.sh",
-    "test:a2a": "./scripts/test-a2a-negotiate.sh"
+    "test:a2a": "./scripts/test-a2a-negotiate.sh",
+    "test:phase2": "./scripts/test-phase2-gate.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

@@ -15,10 +15,13 @@
  * the receiver will pull the indicator next tick if it cares.
  */
 
-import { TREASURER_SERVICE_NAME, type ShareEconomicIndicatorInput } from '@federated-reserve/shared';
+import {
+  type ShareEconomicIndicatorInput,
+  TREASURER_SERVICE_NAME,
+} from '@federated-reserve/shared';
 import { MCP_TOOLS } from '@federated-reserve/shared';
-import type { AgentConfig } from './config.ts';
 import type { AxlClient } from './axl-client.ts';
+import type { AgentConfig } from './config.ts';
 import type { MeshDiscovery } from './discovery.ts';
 
 let broadcastSeq = 1;

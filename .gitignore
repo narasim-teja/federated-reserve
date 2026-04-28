@@ -49,3 +49,7 @@ contracts/lib/
 logs/
 tmp/
 .tmp/
+
+# Phase 2 runtime state (per-agent memory + data plane cache)
+memory/
+.data/

@@ -73,7 +73,9 @@ try {
 
 const obj = parsed as Record<string, unknown>;
 if (!obj.quote && !obj.routing) {
-  console.error(`[spike-03] FAIL: response missing 'quote' or 'routing' field: ${text.slice(0, 500)}`);
+  console.error(
+    `[spike-03] FAIL: response missing 'quote' or 'routing' field: ${text.slice(0, 500)}`,
+  );
   process.exit(1);
 }
 

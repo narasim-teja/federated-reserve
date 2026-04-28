@@ -1,0 +1,11 @@
+{
+  "PrivateKeyPath": "../../.keys/node-fl.pem",
+  "Peers": ["tls://127.0.0.1:9001"],
+  "Listen": [],
+  "api_port": 9042,
+  "tcp_port": 7000,
+  "router_addr": "http://127.0.0.1",
+  "router_port": 9043,
+  "a2a_addr": "http://127.0.0.1",
+  "a2a_port": 9044
+}

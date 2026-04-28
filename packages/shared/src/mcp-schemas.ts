@@ -78,9 +78,11 @@ export type ShareEconomicIndicatorResult = z.infer<typeof shareEconomicIndicator
  * gossip their views over MCP. After 1-2 refresh rounds, every agent
  * converges on the full mesh.
  */
-export const shareTopologyInputSchema = z.object({
-  // Empty by design — caller wants whatever this peer currently knows.
-}).strict();
+export const shareTopologyInputSchema = z
+  .object({
+    // Empty by design — caller wants whatever this peer currently knows.
+  })
+  .strict();
 export type ShareTopologyInput = z.infer<typeof shareTopologyInputSchema>;
 
 export const shareTopologyResultSchema = z.object({

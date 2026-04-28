@@ -14,13 +14,14 @@
  * needs SSE; Phase 1 only exercises blocking `message/send`.
  */
 
+import type { AgentCard } from '@a2a-js/sdk';
 import {
   DefaultRequestHandler,
   InMemoryTaskStore,
   JsonRpcTransportHandler,
 } from '@a2a-js/sdk/server';
-import type { AgentCard } from '@a2a-js/sdk';
 import type { AgentConfig } from '../config.ts';
+import type { Reasoner } from '../reason.ts';
 import type { AgentState } from '../state.ts';
 import { buildAgentCard } from './card.ts';
 import { FederatedReserveAgentExecutor } from './executor.ts';
@@ -31,10 +32,15 @@ export interface A2aServerHandle {
   stop: () => void;
 }
 
-export function startA2aServer(cfg: AgentConfig, _state: AgentState): A2aServerHandle {
+export function startA2aServer(
+  cfg: AgentConfig,
+  state: AgentState,
+  reasoner?: Reasoner,
+  systemPrompt?: string,
+): A2aServerHandle {
   const agentCard = buildAgentCard(cfg);
   const taskStore = new InMemoryTaskStore();
-  const executor = new FederatedReserveAgentExecutor(cfg);
+  const executor = new FederatedReserveAgentExecutor(cfg, state, reasoner, systemPrompt);
   const requestHandler = new DefaultRequestHandler(agentCard, taskStore, executor);
   const transport = new JsonRpcTransportHandler(requestHandler);
 

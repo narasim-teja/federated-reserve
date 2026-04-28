@@ -52,7 +52,11 @@ export class AxlClient {
     const seen = new Set<string>();
     const collect = (xs: AxlPeer[] | undefined) => {
       for (const x of xs ?? []) {
-        if (typeof x.public_key === 'string' && x.public_key && x.public_key !== top.our_public_key) {
+        if (
+          typeof x.public_key === 'string' &&
+          x.public_key &&
+          x.public_key !== top.our_public_key
+        ) {
           seen.add(x.public_key);
         }
       }

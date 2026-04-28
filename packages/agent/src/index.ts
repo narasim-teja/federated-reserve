@@ -1,37 +1,71 @@
 /**
  * Agent entry point.
  *
- * Startup ordering (validated in Phase 0 spike-02):
+ * Phase 2 startup ordering (Phase 1 baseline + memory + data-plane + reasoner):
  *   1. AXL node (sidecar — assumed already up; we just probe /topology)
  *   2. MCP Router (sidecar — wait for /health)
- *   3. Local TS MCP server (Bun.serve)
- *   4. Register MCP server with Router
- *   5. Local TS A2A server (Bun.serve)
- *   6. Tick loop
+ *   3. AgentMemory (load prior state from disk if any)
+ *   4. Reasoner (lazy — instantiated only if reasoning enabled)
+ *   5. DataPlaneClient (logs an unreachable warning at startup; tolerable)
+ *   6. Local TS MCP server (Bun.serve)
+ *   7. Register MCP server with Router
+ *   8. Local TS A2A server (Bun.serve)
+ *   9. MeshDiscovery (1-hop gossip refresh loop)
+ *  10. Tick loop
  *
- * Shutdown reverses: stop tick → stop A2A → deregister + stop MCP → done.
- * AXL and Router are sidecars and outlive the agent.
+ * Shutdown reverses: stop tick → discovery → A2A → deregister + stop MCP →
+ * persist final state → done. AXL and Router outlive the agent.
  */
 
-import { describeAgent, loadConfig } from './config.ts';
-import { AxlClient } from './axl-client.ts';
-import { McpRouterClient } from './mcp-router-client.ts';
-import { MeshDiscovery } from './discovery.ts';
-import { makeMcpRequestHandler } from './mcp/server.ts';
+import { getPersona } from '@federated-reserve/shared';
 import { startA2aServer } from './a2a/server.ts';
+import { AxlClient } from './axl-client.ts';
+import { describeAgent, loadConfig } from './config.ts';
+import { DataPlaneClient } from './data-plane-client.ts';
+import { MeshDiscovery } from './discovery.ts';
+import { McpRouterClient } from './mcp-router-client.ts';
+import { makeMcpRequestHandler } from './mcp/server.ts';
+import { makeMemory } from './memory.ts';
+import { type Reasoner, getReasoner } from './reason.ts';
 import { makeInitialState } from './state.ts';
+import { buildAgentSystemPrompt } from './system-prompts.ts';
 import { startTickLoop } from './tick.ts';
 
 const cfg = loadConfig();
-const state = makeInitialState(cfg.state.fips);
+const persona = getPersona(cfg.state.abbr);
+const systemPrompt = buildAgentSystemPrompt(cfg.state, persona);
+const memory = makeMemory({ agentKey: cfg.state.abbr.toLowerCase() });
+
+// Hydrate state from prior run if present.
+const persisted = await memory.loadState();
+const state = persisted ?? makeInitialState(cfg.state.fips);
+if (persisted) {
+  console.log(`[${cfg.state.abbr}] resumed from ${memory.describe()}: tick=${persisted.tickCount}`);
+}
+
 const axl = new AxlClient(cfg.axl.apiUrl);
 const router = new McpRouterClient(cfg.mcp.routerUrl);
 const discovery = new MeshDiscovery(cfg, axl);
+const dataPlane = new DataPlaneClient(cfg.dataPlaneUrl);
+
+let reasoner: Reasoner | undefined;
+if (cfg.reasoningEnabled) {
+  try {
+    reasoner = getReasoner();
+    console.log(`[${cfg.state.abbr}] OpenRouter reasoner ready (preset tier: ${cfg.state.tier})`);
+  } catch (err) {
+    console.warn(
+      `[${cfg.state.abbr}] OpenRouter init failed (${String(err)}); falling back to deterministic logic`,
+    );
+  }
+} else {
+  console.log(`[${cfg.state.abbr}] OpenRouter disabled — using deterministic fallback paths`);
+}
 
 console.log(`[${cfg.state.abbr}] starting agent: ${describeAgent(cfg)}`);
 console.log(
   `[${cfg.state.abbr}]   AXL=${cfg.axl.apiUrl}  router=${cfg.mcp.routerUrl}  ` +
-    `mcp=:${cfg.mcp.serverPort}  a2a=:${cfg.a2a.serverPort}`,
+    `mcp=:${cfg.mcp.serverPort}  a2a=:${cfg.a2a.serverPort}  data=${cfg.dataPlaneUrl}`,
 );
 
 // 1. Probe AXL /topology so we fail fast if the sidecar isn't up.
@@ -47,7 +81,21 @@ console.log(
 await router.waitReady();
 console.log(`[${cfg.state.abbr}]   MCP Router ready`);
 
-// 3. Start MCP server.
+// 3. Probe data plane (best-effort — tolerated if not up yet).
+{
+  const health = await dataPlane.healthz();
+  if (health) {
+    console.log(
+      `[${cfg.state.abbr}]   data plane up — ${health.states_loaded}/${health.states_total} states loaded`,
+    );
+  } else {
+    console.warn(
+      `[${cfg.state.abbr}]   data plane unreachable at ${cfg.dataPlaneUrl} — ticks will skip broadcasts`,
+    );
+  }
+}
+
+// 4. Start MCP server.
 const handleMcp = makeMcpRequestHandler({ cfg, state, axl, discovery });
 const mcpServer = Bun.serve({
   port: cfg.mcp.serverPort,
@@ -60,7 +108,7 @@ const mcpServer = Bun.serve({
 });
 console.log(`[${cfg.state.abbr}]   MCP server listening on ${cfg.mcp.serverEndpoint}`);
 
-// 4. Register with the Router.
+// 5. Register with the Router.
 await router.register({
   service: cfg.mcp.serviceName,
   endpoint: cfg.mcp.serverEndpoint,
@@ -69,16 +117,26 @@ console.log(
   `[${cfg.state.abbr}]   Registered "${cfg.mcp.serviceName}" with router at ${cfg.mcp.routerUrl}`,
 );
 
-// 5. Start A2A server.
-const a2a = startA2aServer(cfg, state);
+// 6. Start A2A server (now reasoner-aware).
+const a2a = startA2aServer(cfg, state, reasoner, systemPrompt);
 
-// 6. Start the gossip discovery loop. First refresh fires in 2s (after our
-//    own MCP server is up so peers querying us back get a real response);
-//    subsequent refreshes every 10s. Phase 2 may dial this up/down.
+// 7. Discovery loop.
 discovery.start(10_000);
 
-// 7. Start tick loop.
-const tick = startTickLoop(cfg, axl, discovery);
+// 8. Tick loop.
+const tick = startTickLoop({
+  cfg,
+  axl,
+  discovery,
+  dataPlane,
+  memory,
+  state,
+  reasoner,
+  systemPrompt,
+});
+
+// Persist initial state immediately so the file exists.
+await memory.saveState(state);
 
 console.log(`[${cfg.state.abbr}] ✓ agent ready`);
 
@@ -94,6 +152,9 @@ async function shutdown(sig: string): Promise<void> {
   a2a.stop();
   await router.deregister(cfg.mcp.serviceName);
   mcpServer.stop();
+  await memory.saveState(state).catch((err: unknown) => {
+    console.warn(`[${cfg.state.abbr}] final state save failed: ${String(err)}`);
+  });
   process.exit(0);
 }
 process.on('SIGINT', () => void shutdown('SIGINT'));

@@ -11,22 +11,22 @@
  *     logs it into agent state, returns ack
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import {
   MCP_TOOLS,
-  queryTreasuryInputSchema,
-  shareEconomicIndicatorInputSchema,
-  shareTopologyInputSchema,
   type QueryTreasuryResult,
   type ShareEconomicIndicatorResult,
   type ShareTopologyResult,
+  queryTreasuryInputSchema,
+  shareEconomicIndicatorInputSchema,
+  shareTopologyInputSchema,
 } from '@federated-reserve/shared';
 import { lookupStateByFips } from '@federated-reserve/shared';
-import type { AgentConfig } from '../config.ts';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { AxlClient } from '../axl-client.ts';
+import type { AgentConfig } from '../config.ts';
 import type { MeshDiscovery } from '../discovery.ts';
-import type { AgentState } from '../state.ts';
+import { type AgentState, pushReceivedIndicator } from '../state.ts';
 
 interface ServerDeps {
   cfg: AgentConfig;
@@ -76,7 +76,7 @@ function registerTools(mcp: McpServer, deps: ServerDeps): void {
     },
     async (input) => {
       const receivedAt = new Date().toISOString();
-      state.receivedIndicators.push({ ...input, receivedAt });
+      pushReceivedIndicator(state, { ...input, receivedAt });
 
       const fromAbbr = lookupStateByFips(input.state_fips)?.abbr ?? `FIPS${input.state_fips}`;
       console.log(

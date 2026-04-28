@@ -1,1 +1,63 @@
-{"_format":"","paths":{"artifacts":"out","build_infos":"out/build-info","sources":"src","tests":"test","scripts":"script","libraries":["lib"]},"files":{"src/HelloToken.sol":{"lastModificationDate":1777306236292,"contentHash":"bb038ca558ebced9","interfaceReprHash":null,"sourceName":"src/HelloToken.sol","imports":[],"versionRequirement":"^0.8.24","artifacts":{"HelloToken":{"0.8.24":{"default":{"path":"HelloToken.sol/HelloToken.json","build_id":"c037403e4231e327"}}}},"seenByCompiler":true}},"builds":["c037403e4231e327"],"profiles":{"default":{"solc":{"optimizer":{"enabled":true,"runs":200},"metadata":{"useLiteralContent":false,"bytecodeHash":"ipfs","appendCBOR":true},"outputSelection":{"*":{"*":["abi","evm.bytecode.object","evm.bytecode.sourceMap","evm.bytecode.linkReferences","evm.deployedBytecode.object","evm.deployedBytecode.sourceMap","evm.deployedBytecode.linkReferences","evm.deployedBytecode.immutableReferences","evm.methodIdentifiers","metadata"]}},"evmVersion":"cancun","viaIR":false,"libraries":{}},"vyper":{"evmVersion":"cancun","outputSelection":{"*":{"*":["abi","evm.bytecode","evm.deployedBytecode"]}}}}},"preprocessed":false,"mocks":[]}
+{
+  "_format": "",
+  "paths": {
+    "artifacts": "out",
+    "build_infos": "out/build-info",
+    "sources": "src",
+    "tests": "test",
+    "scripts": "script",
+    "libraries": ["lib"]
+  },
+  "files": {
+    "src/HelloToken.sol": {
+      "lastModificationDate": 1777306236292,
+      "contentHash": "bb038ca558ebced9",
+      "interfaceReprHash": null,
+      "sourceName": "src/HelloToken.sol",
+      "imports": [],
+      "versionRequirement": "^0.8.24",
+      "artifacts": {
+        "HelloToken": {
+          "0.8.24": {
+            "default": { "path": "HelloToken.sol/HelloToken.json", "build_id": "c037403e4231e327" }
+          }
+        }
+      },
+      "seenByCompiler": true
+    }
+  },
+  "builds": ["c037403e4231e327"],
+  "profiles": {
+    "default": {
+      "solc": {
+        "optimizer": { "enabled": true, "runs": 200 },
+        "metadata": { "useLiteralContent": false, "bytecodeHash": "ipfs", "appendCBOR": true },
+        "outputSelection": {
+          "*": {
+            "*": [
+              "abi",
+              "evm.bytecode.object",
+              "evm.bytecode.sourceMap",
+              "evm.bytecode.linkReferences",
+              "evm.deployedBytecode.object",
+              "evm.deployedBytecode.sourceMap",
+              "evm.deployedBytecode.linkReferences",
+              "evm.deployedBytecode.immutableReferences",
+              "evm.methodIdentifiers",
+              "metadata"
+            ]
+          }
+        },
+        "evmVersion": "cancun",
+        "viaIR": false,
+        "libraries": {}
+      },
+      "vyper": {
+        "evmVersion": "cancun",
+        "outputSelection": { "*": { "*": ["abi", "evm.bytecode", "evm.deployedBytecode"] } }
+      }
+    }
+  },
+  "preprocessed": false,
+  "mocks": []
+}

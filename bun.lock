@@ -23,6 +23,18 @@
         "typescript": "^5.6.0",
       },
     },
+    "packages/data-plane": {
+      "name": "@federated-reserve/data-plane",
+      "version": "0.1.0",
+      "dependencies": {
+        "@federated-reserve/shared": "workspace:*",
+        "zod": "^3.25.0",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.6.0",
+      },
+    },
     "packages/shared": {
       "name": "@federated-reserve/shared",
       "version": "0.1.0",
@@ -56,6 +68,8 @@
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@1.9.4", "", { "os": "win32", "cpu": "x64" }, "sha512-8Y5wMhVIPaWe6jw2H+KlEm4wP/f7EW3810ZLmDlrEEy5KvBsb9ECEfu/kMWD484ijfQ8+nIi0giMgu9g1UAuuA=="],
 
     "@federated-reserve/agent": ["@federated-reserve/agent@workspace:packages/agent"],
+
+    "@federated-reserve/data-plane": ["@federated-reserve/data-plane@workspace:packages/data-plane"],
 
     "@federated-reserve/shared": ["@federated-reserve/shared@workspace:packages/shared"],
 

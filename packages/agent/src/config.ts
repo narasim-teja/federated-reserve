@@ -6,7 +6,7 @@
  * mirror the spike-01/02 layout.
  */
 
-import { lookupStateByFips, type StateInfo } from '@federated-reserve/shared';
+import { type StateInfo, lookupStateByFips } from '@federated-reserve/shared';
 
 function readNumber(key: string, fallback: number): number {
   const v = process.env[key];
@@ -46,8 +46,17 @@ export interface AgentConfig {
     /** Where the local A2A server listens (Bun.serve). */
     serverPort: number;
   };
+  /** Shared data plane URL (defaults to local 127.0.0.1:3002). */
+  dataPlaneUrl: string;
   /** Tick interval in ms; production = 1hr, local dev usually shorter. */
   tickIntervalMs: number;
+  /** Reflection runs every N ticks. Default 4. */
+  reflectEveryNTicks: number;
+  /**
+   * Whether to attempt OpenRouter calls. If false, executors fall back to
+   * deterministic logic. Useful in CI / when key is a placeholder.
+   */
+  reasoningEnabled: boolean;
 }
 
 export function loadConfig(): AgentConfig {
@@ -58,6 +67,11 @@ export function loadConfig(): AgentConfig {
   }
 
   const mcpServerPort = readNumber('MCP_SERVER_PORT', 7100);
+  const openrouterKey = process.env.OPENROUTER_API_KEY;
+  const reasoningEnabled =
+    !!openrouterKey &&
+    openrouterKey !== 'sk-or-v1-PLACEHOLDER' &&
+    process.env.REASONING_ENABLED !== '0';
 
   return {
     state,
@@ -73,7 +87,10 @@ export function loadConfig(): AgentConfig {
     a2a: {
       serverPort: readNumber('A2A_SERVER_PORT', 9004),
     },
+    dataPlaneUrl: readString('DATA_PLANE_URL', 'http://127.0.0.1:3002'),
     tickIntervalMs: readNumber('TICK_INTERVAL_MS', 30_000),
+    reflectEveryNTicks: readNumber('REFLECT_EVERY_N_TICKS', 4),
+    reasoningEnabled,
   };
 }
 

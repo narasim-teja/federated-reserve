@@ -30,7 +30,12 @@ function registerTools(mcp: McpServer): void {
       title: 'Query state treasury composition',
       description: 'Get the current treasury composition for a US state by FIPS code.',
       inputSchema: {
-        state_fips: z.number().int().min(1).max(56).describe('US state FIPS code, e.g. 25 for Massachusetts'),
+        state_fips: z
+          .number()
+          .int()
+          .min(1)
+          .max(56)
+          .describe('US state FIPS code, e.g. 25 for Massachusetts'),
       },
     },
     async ({ state_fips }) => {
@@ -49,7 +54,7 @@ function registerTools(mcp: McpServer): void {
       return {
         content: [{ type: 'text', text: JSON.stringify(fake, null, 2) }],
       };
-    }
+    },
   );
 }
 
@@ -57,7 +62,7 @@ function registerTools(mcp: McpServer): void {
 async function handleMcpRequest(req: Request): Promise<Response> {
   const mcp = new McpServer(
     { name: 'ma-treasurer', version: '0.1.0' },
-    { capabilities: { tools: {} } }
+    { capabilities: { tools: {} } },
   );
   registerTools(mcp);
 

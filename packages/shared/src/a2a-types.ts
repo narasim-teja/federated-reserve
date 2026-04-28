@@ -97,3 +97,124 @@ export const swapSettlementSchema = z.object({
   settled_at: z.string(),
 });
 export type SwapSettlement = z.infer<typeof swapSettlementSchema>;
+
+// ---------- skill envelope (skills other than negotiate-bilateral-swap) -----
+//
+// Phase 2 adds four skill payload shapes. Each is wrapped in a top-level
+// envelope so the executor can dispatch by `skill` before parsing the
+// payload. negotiate-bilateral-swap retains its Phase-1 schema (no envelope)
+// for backward compatibility with the existing gate test.
+
+export const COALITION_TAGS = [
+  'northeast',
+  'midwest',
+  'south',
+  'west',
+  'tech-correlated',
+  'finance-correlated',
+  'energy-correlated',
+  'climate-exposed',
+  'hurricane-exposed',
+  'gulf-disaster-pool',
+  'pension-stressed',
+  'sovereign-wealth-style',
+] as const;
+export const coalitionTagSchema = z.enum(COALITION_TAGS);
+export type CoalitionTag = z.infer<typeof coalitionTagSchema>;
+
+// participate-in-coalition: initiator invites peers to join a coalition by tag
+export const coalitionInviteSchema = z.object({
+  skill: z.literal('participate-in-coalition'),
+  initiator_fips: fipsSchema,
+  coalition_tag: coalitionTagSchema,
+  topic: z
+    .string()
+    .min(1)
+    .max(200)
+    .describe('Free-text coalition purpose, e.g. "shared-aid-pool-Q3-2026"'),
+  proposed_contribution_usd: z.number().nonnegative(),
+});
+export type CoalitionInvite = z.infer<typeof coalitionInviteSchema>;
+
+export const coalitionResponseSchema = z.object({
+  skill: z.literal('participate-in-coalition'),
+  kind: z.enum(['joined', 'declined']),
+  responder_fips: fipsSchema,
+  contribution_usd: z.number().nonnegative(),
+  rationale: z.string().min(1).max(500),
+});
+export type CoalitionResponse = z.infer<typeof coalitionResponseSchema>;
+
+// bond-auction: issuer announces, peer bids
+export const bondBidSchema = z.object({
+  skill: z.literal('bond-auction'),
+  issuer_fips: fipsSchema,
+  bidder_fips: fipsSchema,
+  bond_id: z.string().min(1).max(80),
+  principal_usd: z.number().positive(),
+  bid_yield_bps: z.number().int().min(0).max(50_000),
+  rationale: z.string().min(1).max(500),
+});
+export type BondBid = z.infer<typeof bondBidSchema>;
+
+export const bondAwardSchema = z.object({
+  skill: z.literal('bond-auction'),
+  kind: z.enum(['awarded', 'rejected']),
+  bond_id: z.string(),
+  to_fips: fipsSchema,
+  yield_bps: z.number().int(),
+  rationale: z.string().min(1).max(500),
+});
+export type BondAward = z.infer<typeof bondAwardSchema>;
+
+// request-emergency-aid
+export const aidRequestSchema = z.object({
+  skill: z.literal('request-emergency-aid'),
+  requester_fips: fipsSchema,
+  reason: z.string().min(1).max(300).describe('Stress reason, e.g. "hurricane Q3 forecast"'),
+  amount_usd: z.number().positive(),
+  repayment_terms: z.string().min(1).max(300),
+});
+export type AidRequest = z.infer<typeof aidRequestSchema>;
+
+export const aidResponseSchema = z.object({
+  skill: z.literal('request-emergency-aid'),
+  kind: z.enum(['offered', 'declined']),
+  responder_fips: fipsSchema,
+  amount_usd: z.number().nonnegative(),
+  yield_bps: z.number().int(),
+  rationale: z.string().min(1).max(500),
+});
+export type AidResponse = z.infer<typeof aidResponseSchema>;
+
+// coordinate-shock-response
+export const shockSignalSchema = z.object({
+  skill: z.literal('coordinate-shock-response'),
+  initiator_fips: fipsSchema,
+  shock_kind: z.enum(['natural_disaster', 'market_shock', 'policy_shock']),
+  affected_fips: z.array(fipsSchema),
+  severity: z.number().int().min(1).max(10),
+  proposed_action: z.string().min(1).max(500),
+});
+export type ShockSignal = z.infer<typeof shockSignalSchema>;
+
+export const shockContributionSchema = z.object({
+  skill: z.literal('coordinate-shock-response'),
+  kind: z.enum(['joining', 'abstaining']),
+  responder_fips: fipsSchema,
+  commitment_usd: z.number().nonnegative(),
+  rationale: z.string().min(1).max(500),
+});
+export type ShockContribution = z.infer<typeof shockContributionSchema>;
+
+/**
+ * Top-level discriminated union for the 4 new skills' first messages.
+ * Routed by `skill`; the executor dispatches to the matching handler.
+ */
+export const skillEnvelopeSchema = z.discriminatedUnion('skill', [
+  coalitionInviteSchema,
+  bondBidSchema,
+  aidRequestSchema,
+  shockSignalSchema,
+]);
+export type SkillEnvelope = z.infer<typeof skillEnvelopeSchema>;

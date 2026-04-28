@@ -10,7 +10,9 @@
     ".": "./src/index.ts",
     "./states": "./src/states.ts",
     "./mcp-schemas": "./src/mcp-schemas.ts",
-    "./a2a-types": "./src/a2a-types.ts"
+    "./a2a-types": "./src/a2a-types.ts",
+    "./data-plane": "./src/data-plane.ts",
+    "./personas": "./src/personas.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

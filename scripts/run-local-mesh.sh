@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Phase 1 local mesh: 3 AXL nodes + 3 MCP routers + 3 agent processes (MA, CA, TX).
+# Phase 2 local mesh: 5 AXL nodes + 5 MCP routers + 5 agent processes (MA, CA, TX, NY, FL).
+# Also boots the data plane sidecar on :3002 (single shared service for FRED ingestion).
 #
 # Topology:
 #   MA (FIPS 25): AXL :9002 listen :9001  | router :9003  | mcp :7100  | a2a :9004
 #   CA (FIPS  6): AXL :9012 peers→:9001   | router :9013  | mcp :7110  | a2a :9014
 #   TX (FIPS 48): AXL :9022 peers→:9001   | router :9023  | mcp :7120  | a2a :9024
+#   NY (FIPS 36): AXL :9032 peers→:9001   | router :9033  | mcp :7130  | a2a :9034
+#   FL (FIPS 12): AXL :9042 peers→:9001   | router :9043  | mcp :7140  | a2a :9044
+#   data-plane (single shared sidecar):     :3002
 #
 # All AXL nodes share `tcp_port: 7000` per the Phase 0 finding (gVisor TCP is
 # virtual per-process, and AXL's send dialer uses *its own* tcp_port as the
@@ -14,6 +18,11 @@
 #   ./scripts/run-local-mesh.sh           # boot everything; foreground
 #   ./scripts/run-local-mesh.sh stop      # kill any leftover processes/ports
 #   ./scripts/run-local-mesh.sh status    # quick health probe of each agent
+#
+# Env knobs:
+#   MESH_AGENTS=3                # legacy 3-agent mesh (skip NY/FL)
+#   SKIP_DATA_PLANE=1            # don't boot the data plane sidecar
+#   TICK_INTERVAL_MS=30000       # passed through to each agent process
 
 set -euo pipefail
 
@@ -23,19 +32,36 @@ CONFIG_DIR="$ROOT/mesh/configs"
 KEY_DIR="$ROOT/.keys"
 PID_FILE="/tmp/federated-reserve-mesh.pids"
 LOG_DIR="${LOG_DIR:-/tmp/federated-reserve}"
+DATA_PLANE_PORT="${DATA_PLANE_PORT:-3002}"
 mkdir -p "$LOG_DIR"
 
 cmd="${1:-run}"
 
 # ---------- agents -----------------------------------------------------------
 # name, fips, axl_api, axl_listen, router, mcp, a2a, key_pem, config
-AGENTS=(
+ALL_AGENTS=(
   "MA 25 9002 9001 9003 7100 9004 node-ma.pem node-ma.json"
   "CA  6 9012 9011 9013 7110 9014 node-ca.pem node-ca.json"
   "TX 48 9022 9021 9023 7120 9024 node-tx.pem node-tx.json"
+  "NY 36 9032 9031 9033 7130 9034 node-ny.pem node-ny.json"
+  "FL 12 9042 9041 9043 7140 9044 node-fl.pem node-fl.json"
 )
 
-ALL_PORTS=(9001 9002 9011 9012 9021 9022 7000 9003 9013 9023 7100 7110 7120 9004 9014 9024)
+# Default to 5-agent mesh; opt out via env for the legacy Phase 1 layout.
+case "${MESH_AGENTS:-5}" in
+  3) AGENTS=("${ALL_AGENTS[@]:0:3}") ;;
+  5) AGENTS=("${ALL_AGENTS[@]}") ;;
+  *) echo "ERROR: MESH_AGENTS must be 3 or 5"; exit 1 ;;
+esac
+
+ALL_PORTS=(
+  9001 9002 9011 9012 9021 9022 9031 9032 9041 9042
+  7000
+  9003 9013 9023 9033 9043
+  7100 7110 7120 7130 7140
+  9004 9014 9024 9034 9044
+  "$DATA_PLANE_PORT"
+)
 
 cleanup() {
   echo "[mesh] stopping..."
@@ -130,6 +156,31 @@ for entry in "${AGENTS[@]}"; do
   done
 done
 
+# ---------- Step 2.5: Data plane (shared sidecar) ---------------------------
+if [[ "${SKIP_DATA_PLANE:-0}" == "1" ]]; then
+  echo "[mesh] SKIP_DATA_PLANE=1 — agents will tick without real FRED snapshots"
+else
+  echo "[mesh] starting data plane on :$DATA_PLANE_PORT"
+  (
+    cd "$ROOT/packages/data-plane" && \
+    DATA_PLANE_PORT="$DATA_PLANE_PORT" \
+    bun run src/index.ts
+  ) > "$LOG_DIR/data-plane.log" 2>&1 &
+  echo $! >> "$PID_FILE"
+  for i in {1..15}; do
+    if curl -fsS "http://127.0.0.1:$DATA_PLANE_PORT/healthz" > /dev/null 2>&1; then
+      echo "  - data plane ready"
+      break
+    fi
+    if [[ $i -eq 15 ]]; then
+      echo "  - data plane FAILED to come up"
+      tail -30 "$LOG_DIR/data-plane.log"
+      exit 1
+    fi
+    sleep 0.5
+  done
+fi
+
 # ---------- Step 3: Agent processes (each runs MCP server + A2A server) -----
 for entry in "${AGENTS[@]}"; do
   read -r name fips api _listen router mcp a2a _key _cfg <<<"$entry"
@@ -141,6 +192,7 @@ for entry in "${AGENTS[@]}"; do
     MCP_ROUTER_URL="http://127.0.0.1:$router" \
     MCP_SERVER_PORT="$mcp" \
     A2A_SERVER_PORT="$a2a" \
+    DATA_PLANE_URL="http://127.0.0.1:$DATA_PLANE_PORT" \
     TICK_INTERVAL_MS="${TICK_INTERVAL_MS:-30000}" \
     bun run src/index.ts
   ) > "$LOG_DIR/agent-$name.log" 2>&1 &

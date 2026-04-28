@@ -1,49 +1,71 @@
 /**
- * Tick loop scaffold.
+ * Tick loop.
  *
- * Phase 1: heartbeat + a probabilistic indicator broadcast so the mesh has
- * traffic to look at. Phase 2 replaces this with a real ingestion-→reason-→
- * decide pipeline backed by FRED + OpenRouter + 0G Storage.
+ * Phase 2: each tick the agent
+ *   1. polls its own state's snapshot from the data plane
+ *   2. picks the freshest indicator and broadcasts it to the discovered mesh
+ *   3. updates `state.ownSnapshot` and persists state to memory
+ *   4. on every Nth tick, kicks off a reflection pass (handled by reflect.ts)
+ *
+ * If the data plane is unreachable or hasn't loaded our state's snapshot
+ * yet, we skip the broadcast — the project's non-goals say "never fake data."
  */
 
-import type { AgentConfig } from './config.ts';
+import { type StateSnapshot, pickBroadcastIndicator } from '@federated-reserve/shared';
 import type { AxlClient } from './axl-client.ts';
-import type { MeshDiscovery } from './discovery.ts';
 import { broadcastIndicator } from './broadcast.ts';
+import type { AgentConfig } from './config.ts';
+import type { DataPlaneClient } from './data-plane-client.ts';
+import type { MeshDiscovery } from './discovery.ts';
+import type { AgentMemory } from './memory.ts';
+import type { Reasoner } from './reason.ts';
+import { runReflection } from './reflect.ts';
+import type { AgentState } from './state.ts';
 
-const SAMPLE_INDICATORS = [
-  { indicator: 'unemployment' as const, base: 4.2, source: 'FRED:UR-state-stub' },
-  { indicator: 'gdp_growth' as const, base: 2.1, source: 'FRED:GDPC1-state-stub' },
-  { indicator: 'tax_revenue' as const, base: 3.5, source: 'NASBO-stub' },
-];
+export interface TickDeps {
+  cfg: AgentConfig;
+  axl: AxlClient;
+  discovery: MeshDiscovery;
+  dataPlane: DataPlaneClient;
+  memory: AgentMemory;
+  state: AgentState;
+  reasoner?: Reasoner;
+  /** System prompt baked at startup; passed to the reasoner on every call. */
+  systemPrompt: string;
+}
 
-export function startTickLoop(
-  cfg: AgentConfig,
-  axl: AxlClient,
-  discovery: MeshDiscovery,
-): { stop: () => void } {
+export function startTickLoop(deps: TickDeps): { stop: () => void } {
+  const { cfg, state, memory, dataPlane } = deps;
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let tickCount = 0;
 
   const tick = async () => {
     if (stopped) return;
-    tickCount++;
+    state.tickCount += 1;
+    const tickNo = state.tickCount;
+
     try {
-      // Phase 1 stub: pick one of the sample indicators, jitter the value,
-      // broadcast to the mesh. Doesn't matter that it's fake — the test is
-      // proving the pipe works.
-      const sample = SAMPLE_INDICATORS[tickCount % SAMPLE_INDICATORS.length]!;
-      const value = sample.base + (Math.sin(tickCount + cfg.state.fips) * 0.5);
-      await broadcastIndicator(cfg, axl, discovery, {
-        state_fips: cfg.state.fips,
-        indicator: sample.indicator,
-        value: Number(value.toFixed(3)),
-        timestamp: new Date().toISOString(),
-        source: sample.source,
-      });
+      const snapshot = await dataPlane.snapshot(cfg.state.fips);
+      if (!snapshot) {
+        console.log(
+          `[${cfg.state.abbr}] tick ${tickNo}: no snapshot from data plane yet — skipping broadcast`,
+        );
+      } else {
+        state.ownSnapshot = snapshot;
+        await broadcastFromSnapshot(deps, snapshot, tickNo);
+      }
+
+      // Reflection cadence — log-based summary using OpenRouter (when enabled).
+      if (tickNo % cfg.reflectEveryNTicks === 0) {
+        await runReflection(deps).catch((err: unknown) => {
+          console.warn(`[${cfg.state.abbr}] reflection failed: ${String(err)}`);
+        });
+      }
+
+      // Persist state after the tick (snapshot + tickCount changed).
+      await memory.saveState(state);
     } catch (err) {
-      console.error(`[${cfg.state.abbr}] tick ${tickCount} failed:`, err);
+      console.error(`[${cfg.state.abbr}] tick ${tickNo} failed:`, err);
     } finally {
       if (!stopped) timer = setTimeout(tick, cfg.tickIntervalMs);
     }
@@ -58,4 +80,34 @@ export function startTickLoop(
       if (timer) clearTimeout(timer);
     },
   };
+}
+
+async function broadcastFromSnapshot(
+  deps: TickDeps,
+  snapshot: StateSnapshot,
+  tickNo: number,
+): Promise<void> {
+  const { cfg, axl, discovery, memory } = deps;
+  const picked = pickBroadcastIndicator(snapshot);
+  if (!picked) {
+    console.log(
+      `[${cfg.state.abbr}] tick ${tickNo}: snapshot has no indicators yet — skipping broadcast`,
+    );
+    return;
+  }
+  const input = {
+    state_fips: cfg.state.fips,
+    indicator: picked.kind,
+    value: picked.obs.value,
+    timestamp: picked.obs.observation_date,
+    source: picked.obs.source,
+  };
+  const results = await broadcastIndicator(cfg, axl, discovery, input);
+  const ok = results.filter((r) => r.ok).length;
+  await memory.appendLog({
+    kind: 'broadcast_sent',
+    at: new Date().toISOString(),
+    summary: `${picked.kind}=${picked.obs.value} from ${picked.obs.source} → ${ok}/${results.length} peers`,
+    details: { tick: tickNo, input, results },
+  });
 }
