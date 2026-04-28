@@ -235,17 +235,20 @@ A2A server). An "agent" is **four cooperating processes on the same host
 │                                                    │  │ (Python integrations)│
 │  Tick loop (1hr real = 1 quarter sim)              │  │ port :9003           │
 │   ↓                                                │  │  POST /register      │
-│  1. Fetch state snapshot from data plane           │  │  POST /route         │
-│  2. Read own memory from 0G Storage (KV) [Phase 2] │  └─────────▲────────────┘
-│  3. Reason via OpenRouter (Claude) [Phase 2]       │            │
-│  4. Take actions:                                  │  ┌─────────┴────────────┐
-│     - Broadcast updates (app-level MCP fan-out     │  │ Custom TS A2A server │
-│       over discovery view, see MeshDiscovery)      │  │ (Phase 1 ✅;         │
-│     - Send MCP calls  (POST :9002/mcp/{peer}/...)  │  │  uses @a2a-js/sdk)   │
-│     - Send A2A skills (POST :9002/a2a/{peer})      │  │ port :9004           │
-│     - Execute swaps (Uniswap Trading API) [Phase 3]│  └─────────▲────────────┘
-│  5. Reflect on prior tick outcomes [Phase 2]       │            │
-│  6. Persist to 0G Storage [Phase 2]                │            │
+│  1. Fetch state snapshot from data plane (Phase 2 ✅) │  POST /route         │
+│  2. Read own memory (LocalDiskMemory; Phase 2 ✅,  │  └─────────▲────────────┘
+│     0G Storage swap deferred to Phase 5/6)         │            │
+│  3. Reason via OpenRouter preset (Phase 2 ✅)      │  ┌─────────┴────────────┐
+│  4. Take actions:                                  │  │ Custom TS A2A server │
+│     - Broadcast updates (app-level MCP fan-out     │  │ (Phase 1 ✅;         │
+│       over discovery view, see MeshDiscovery)      │  │  uses @a2a-js/sdk)   │
+│     - Send MCP calls  (POST :9002/mcp/{peer}/...)  │  │ port :9004           │
+│     - Send A2A skills (POST :9002/a2a/{peer})      │  └─────────▲────────────┘
+│     - Execute swaps (Uniswap Trading API) [Phase 3]│            │
+│  5. Reflect on prior tick outcomes (Phase 2 ✅,    │            │
+│     every REFLECT_EVERY_N_TICKS ticks)             │            │
+│  6. Persist state + log via memory.saveState/      │            │
+│     appendLog (Phase 2 ✅; LocalDiskMemory)        │            │
 │                                                    │            │
 │  Concurrent in the same Bun process:               │            │
 │   - TS MCP server (Bun.serve + MCP SDK port :7100, │            │
@@ -277,13 +280,17 @@ Concrete reference: [`packages/agent/src/index.ts`](../packages/agent/src/index.
 > Phase 0 added `vendor/`, `.venv/`, `.keys/`, `spikes/`, and
 > `scripts/derive-wallets.sh`. Phase 1 added `packages/{shared,agent}/`,
 > `mesh/configs/`, the local-mesh runner, and the four gate-test scripts.
-> Phases 2-6 add the rest in-place — paths annotated with their phase.
+> Phase 2 added `packages/data-plane/`, agent-side `memory.ts` /
+> `reason.ts` / `reflect.ts` / `system-prompts.ts` /
+> `data-plane-client.ts`, shared `personas.ts` / `data-plane.ts`,
+> mesh configs for NY+FL, and the Phase 2 gate test. Phases 3-6 add the
+> rest in-place — paths annotated with their phase.
 
 ```
 federated-reserve/
 ├── docs/
 │   ├── PROJECT.md              # vision doc
-│   ├── TECHNICAL.md            # this doc
+│   ├── TECHNICAL.md            # this doc — Phase 2 sections marked ✅ COMPLETE 2026-04-28
 │   ├── PHASE0_REPORT.md        # Phase 0 summary (2026-04-27)
 │   └── PHASE1_REPORT.md        # Phase 1 summary (2026-04-27)
 ├── README.md                   # onboarding
@@ -294,6 +301,10 @@ federated-reserve/
 ├── bun.lock
 ├── .env.example                # template for .env / .env.local
 ├── .gitignore
+├── memory/                     # [Phase 2] per-agent persistent memory (gitignored)
+│   └── {abbr}/{state.json,log.jsonl}
+├── .data/                      # [Phase 2] data-plane disk cache (gitignored)
+│   └── data-plane-cache.json
 ├── vendor/
 │   └── axl/                    # cloned + built from gensyn-ai/axl (Phase 0)
 │       └── node                # the compiled Go binary
@@ -301,48 +312,64 @@ federated-reserve/
 ├── .keys/                      # ed25519 PEMs for AXL nodes (gitignored)
 ├── spikes/                     # Phase 0 dependency spikes (00 through 06)
 ├── mesh/
-│   └── configs/                # AXL node configs for the local 3-agent mesh
-│       └── node-{ma,ca,tx}.json
+│   └── configs/                # AXL node configs for the local mesh
+│       └── node-{ma,ca,tx,ny,fl}.json   # MA/CA/TX = Phase 1; NY/FL = Phase 2
 ├── scripts/
 │   ├── derive-wallets.sh       # [Phase 0] re-derives agent hierarchy from MASTER_SEED
-│   ├── run-local-mesh.sh       # [Phase 1] boots 3 AXL + 3 routers + 3 agents
+│   ├── run-local-mesh.sh       # [Phase 1+2] boots 5 AXL + 5 routers + 5 agents + data plane
 │   ├── test-mcp-unicast.sh     # [Phase 1 gate test] CA → MA query_treasury
 │   ├── test-mcp-discovery.sh   # [Phase 1 gate test] gossip convergence
 │   ├── test-mcp-broadcast.sh   # [Phase 1 gate test] CA → {MA,TX} fan-out
-│   ├── test-a2a-negotiate.sh   # [Phase 1 gate test] multi-turn lifecycle
+│   ├── test-a2a-negotiate.sh   # [Phase 1 gate test] multi-turn lifecycle (deterministic stub era)
+│   ├── test-phase2-gate.sh     # [Phase 2 gate test] full Phase 2 deliverable verification
 │   ├── deploy-contracts.ts     # [Phase 3]
 │   ├── seed-pools.ts           # [Phase 3]
 │   ├── mint-inft.ts            # [Phase 5]
 │   └── replay-historical.ts    # [Phase 6]
 ├── packages/
-│   ├── shared/                 # [Phase 1] shared types, Zod schemas
+│   ├── shared/                 # [Phase 1+2] shared types, Zod schemas
 │   │   ├── src/
 │   │   │   ├── states.ts       # 50 + DC + PR metadata (FIPS, abbr, region, tier)
 │   │   │   ├── mcp-schemas.ts  # Zod schemas: query_treasury, share_economic_indicator,
 │   │   │   │                   # share_topology
-│   │   │   ├── a2a-types.ts    # A2A skill payload types (negotiate-bilateral-swap)
+│   │   │   ├── a2a-types.ts    # A2A skill schemas — negotiate-bilateral-swap (Phase 1) +
+│   │   │   │                   # skillEnvelopeSchema for the 4 Phase 2 skills
+│   │   │   ├── data-plane.ts   # [Phase 2] StateSnapshot / IndicatorObservation / health
+│   │   │   ├── personas.ts     # [Phase 2] hand-tuned posture + coalitions per deep state
 │   │   │   └── index.ts
 │   │   └── package.json
-│   ├── agent/                  # [Phase 1] per-agent runtime — single Bun process
+│   ├── agent/                  # [Phase 1+2] per-agent runtime — single Bun process
 │   │   ├── src/
-│   │   │   ├── index.ts            # entry point — startup/shutdown ordering
-│   │   │   ├── config.ts           # env → AgentConfig
-│   │   │   ├── state.ts            # in-memory state ([Phase 2] swaps for 0G Storage)
+│   │   │   ├── index.ts            # entry point — startup/shutdown ordering (memory + reasoner wired in Phase 2)
+│   │   │   ├── config.ts           # env → AgentConfig (Phase 2 adds dataPlaneUrl, REFLECT_EVERY_N_TICKS, reasoningEnabled)
+│   │   │   ├── state.ts            # in-memory working copy (loaded from / saved to AgentMemory)
+│   │   │   ├── memory.ts           # [Phase 2] AgentMemory interface + LocalDiskMemory (0G impl deferred)
+│   │   │   ├── reason.ts           # [Phase 2] OpenRouter chat-completions client (preset-driven)
+│   │   │   ├── reflect.ts          # [Phase 2] reflection loop (every Nth tick)
+│   │   │   ├── system-prompts.ts   # [Phase 2] per-agent system prompt baked from (state, persona)
+│   │   │   ├── data-plane-client.ts# [Phase 2] thin HTTP client to the data plane
 │   │   │   ├── axl-client.ts       # /topology /send /recv /mcp /a2a wrapper
 │   │   │   ├── mcp-router-client.ts# Python MCP Router register/deregister
 │   │   │   ├── discovery.ts        # 1-hop MCP gossip (share_topology refresh loop)
 │   │   │   ├── broadcast.ts        # app-level fan-out helper (uses discovery)
-│   │   │   ├── tick.ts             # heartbeat + periodic indicator broadcast
+│   │   │   ├── tick.ts             # data-plane snapshot → broadcast → memory.saveState → reflect
 │   │   │   ├── mcp/
 │   │   │   │   └── server.ts       # factory-pattern MCP server (Bun.serve)
 │   │   │   └── a2a/
-│   │   │       ├── card.ts         # AgentCard generator per state
+│   │   │       ├── card.ts         # persona-driven AgentCard generator (Phase 2)
 │   │   │       ├── server.ts       # @a2a-js/sdk JsonRpcTransportHandler on Bun.serve
-│   │   │       └── executor.ts     # AgentExecutor — negotiate-bilateral-swap stub
+│   │   │       └── executor.ts     # AgentExecutor — Phase 1 negotiate + Phase 2 four new skills, all reasoner-driven
 │   │   ├── package.json
 │   │   └── tsconfig.json
-│   ├── data-plane/             # [Phase 2] ingestion service
-│   │   └── src/{fred,bls,gdelt,noaa,server}.ts
+│   ├── data-plane/             # [Phase 2] FRED ingestion sidecar (HTTP service)
+│   │   ├── src/
+│   │   │   ├── index.ts        # Bun.serve — /healthz, /snapshot/:fips, /snapshots, POST /refresh
+│   │   │   ├── cache.ts        # in-memory map + JSON disk persistence
+│   │   │   ├── rate-limit.ts   # serial-chain min-interval limiter (token-bucket replacement)
+│   │   │   ├── scheduler.ts    # periodic refresh + failure tracking for /healthz
+│   │   │   └── sources/
+│   │   │       └── fred.ts     # FRED fetcher with 429/5xx retry-with-backoff
+│   │   └── package.json
 │   ├── observer/               # [Phase 5] frontend WS gateway
 │   │   └── src/server.ts
 │   └── frontend/               # [Phase 5] Next.js
@@ -785,35 +812,68 @@ gate tests green. Full report in [docs/PHASE1_REPORT.md](./PHASE1_REPORT.md).
 
 **Deliverable:** ✅ 3 agents on bare Bun processes (containerization is Phase 6) exchanging both MCP tool calls and A2A skill invocations through real AXL transport.
 
-### Phase 2 — Memory + Reasoning + AgentCards (Day 2)
+### Phase 2 — Memory + Reasoning + AgentCards (Day 2) — ✅ COMPLETE 2026-04-28
 
-**Purpose:** Agents become actually intelligent, remember things, and have real personas advertised over A2A. **Builds on the Phase 1 mesh** ([`packages/agent/`](../packages/agent/) is already running — Phase 2 fills in the stubbed `state.ts` (in-memory) with 0G Storage, the deterministic A2A `executor.ts` with Claude-driven logic, and adds new modules for ingestion).
+**Purpose:** Agents become actually intelligent, remember things, and have real personas advertised over A2A. **Builds on the Phase 1 mesh** ([`packages/agent/`](../packages/agent/) is already running — Phase 2 fills in the stubbed `state.ts` (in-memory) with persistent memory, the deterministic A2A `executor.ts` with reasoner-driven logic, and adds new modules for ingestion).
+
+**Outcome:** 5-agent mesh (MA/CA/TX/NY/FL) running end-to-end with real FRED
+data, reasoner-driven negotiation, persona-driven AgentCards, and per-agent
+disk memory. The Phase 2 gate test
+([`scripts/test-phase2-gate.sh`](../scripts/test-phase2-gate.sh)) is **13/13
+green, 0 warnings, 0 failures** when FRED + OpenRouter keys are populated.
 
 > **Pulled forward from this phase into Phase 1:**
 > - `share_topology` MCP tool + `MeshDiscovery` gossip loop (was a "Phase 2 task" in the original plan; shipped in Phase 1 because the broadcast helper depended on it).
 
+> **Deferred from this phase to later:**
+> - **0G Storage persistence** — Phase 2 ships [`LocalDiskMemory`](../packages/agent/src/memory.ts) (per-agent JSON state + JSONL log under `<repo>/memory/<abbr>/`). The `AgentMemory` interface is the swap point; `OgStorageMemory` will land alongside iNFT minting in Phase 5/6 once the 0G testnet wallet is funded. `MEMORY_BACKEND=local` is the default; `MEMORY_BACKEND=og` will activate the alternate impl when ready.
+
 #### Memory & reasoning
 
-- [ ] `packages/agent/src/memory.ts` — 0G Storage wrapper (KV for current state, Log for history). Tested with read-after-write. Migrates the data currently in [`state.ts`](../packages/agent/src/state.ts) — `composition`, `reserveRatio`, `receivedIndicators` — into 0G Storage so it survives restart.
-- [ ] `packages/agent/src/reason.ts` — OpenRouter integration (Claude via OpenAI-compatible API; **never `@anthropic-ai/sdk` directly**). Tier by model: `anthropic/claude-opus-4-7` for the 8 deep states, `anthropic/claude-haiku-4-5` for observers.
-- [ ] Replace deterministic `negotiate-bilateral-swap` stub in [`a2a/executor.ts`](../packages/agent/src/a2a/executor.ts) with Claude-driven negotiation (counter-or-accept based on reasoning over treasury state + counterparty's last position).
-- [ ] Implement remaining 4 A2A skills in the same executor: `participate-in-coalition`, `bond-auction`, `request-emergency-aid`, `coordinate-shock-response`. The Phase 1 lifecycle pattern (`Working → InputRequired → Completed`) is the template.
-- [ ] Reflection loop — at end of each tick, agent reviews prior decision and outcome, updates "strategy notes" in 0G Storage.
+- [x] **`packages/agent/src/memory.ts`** — `AgentMemory` interface with `LocalDiskMemory` (JSON state.json + JSONL log.jsonl per agent under `MEMORY_ROOT`) and `InMemoryMemory` test variant. State hydrates on startup; tick loop persists after every tick; the JSONL log captures broadcasts, reflections, and (soon) negotiation outcomes. **0G Storage backend deferred to Phase 5/6** behind the same interface.
+- [x] **`packages/agent/src/reason.ts`** — OpenRouter chat-completions client. Resolves `OPENROUTER_PRESET_DEEP` / `OPENROUTER_PRESET_OBSERVER` (bare slug or `@preset/<slug>`) to `model: "@preset/<slug>"`. **System prompt lives in code** ([`packages/agent/src/system-prompts.ts`](../packages/agent/src/system-prompts.ts)) so it tracks in git; preset only sets *model + sampling*. 429/5xx retry-with-backoff. JSON-mode helper for structured decisions. *Phase 2 hackathon run uses Gemini 3 Flash on both presets as a cost-down; the code is preset-agnostic and Opus/Haiku is a one-line OpenRouter UI swap.*
+- [x] **Reasoner-driven `negotiate-bilateral-swap`** in [`a2a/executor.ts`](../packages/agent/src/a2a/executor.ts) — accept / counter / reject decided by JSON-mode call against persona + treasury + indicator context. Deterministic 5%-haircut counter as fallback when OpenRouter is unreachable or `REASONING_ENABLED=0`.
+- [x] **All four additional A2A skills implemented** in the same executor: `participate-in-coalition`, `bond-auction`, `request-emergency-aid`, `coordinate-shock-response`. Schemas in [`packages/shared/src/a2a-types.ts`](../packages/shared/src/a2a-types.ts) (`skillEnvelopeSchema` discriminated union); each handler runs a single reasoning pass and emits `Working → Completed` with the structured response. Phase 1's negotiate lifecycle stays multi-turn (`Working → InputRequired → Completed`); Phase 3+ extends the others to multi-turn as their economic primitives need it.
+- [x] **Reflection loop** — [`packages/agent/src/reflect.ts`](../packages/agent/src/reflect.ts) runs every `REFLECT_EVERY_N_TICKS` ticks (default 4). Reads recent log entries, asks the reasoner for a 2-3 sentence summary referencing the system-prompt-baked posture, persists as `kind: "reflection"` log entry. Sample MA reflection from the Phase 2 run: *"The persistence of the 4.8% unemployment rate confirms a cooling trend in the Commonwealth's labor market, though our reserve ratio remains a healthy 12.4% with a dominant $1.5 trillion position in liquid cash and T-bills... I must now watch for any further softening in personal income data that could signal a deeper structural downturn, requiring me to coordinate with my Northeast coalition partners on a joint stabilization strategy."*
 
 #### Personas
 
-- [ ] **Per-state AgentCards** for the 8 deep states (MA, CA, TX, NY, FL, IL, WA, AK). Currently [`a2a/card.ts`](../packages/agent/src/a2a/card.ts) generates one template card per FIPS — replace with hand-tuned descriptions/policy stance per state. Cards are real artifacts judges (and the frontend) can browse via `GET /a2a/{peer}` over AXL.
-- [ ] Personality + policy posture as a system prompt in `reason.ts`, fed into every Claude call.
+- [x] **Per-state policy posture** for the 8 deep states (MA, CA, TX, NY, FL, IL, WA, AK) hand-tuned in [`packages/shared/src/personas.ts`](../packages/shared/src/personas.ts) — taglines for AgentCard descriptions, multi-sentence posture text injected into the system prompt, coalition-affinity tags for the coalition skill. Observer states get a region-fallback persona so all 50 states have honest taglines.
+- [x] **Per-agent system prompt baked at startup** ([`packages/agent/src/system-prompts.ts`](../packages/agent/src/system-prompts.ts)) — composition of `(state, persona)` covering identity, posture, coalition affinity, decision principles (reserve-ratio-first), and JSON-vs-prose response format conventions. Threaded through every `reasoner.reason*()` call as the OpenAI-style `system` message. Trimmed redundant role/posture lines from per-skill user messages now that the system prompt covers them.
 
 #### Real public data
 
-- [ ] `packages/data-plane/` — FRED ingestion for state-level unemployment, GDP, personal income. Single ingestion service (per the rate-limit table below); output normalized JSON keyed by FIPS code, served at `http://data-plane:3002/snapshot/{fips}`.
-- [ ] Each agent reads its state's snapshot every tick (replaces the `SAMPLE_INDICATORS` stubs in [`tick.ts`](../packages/agent/src/tick.ts)).
-- [ ] Indicator broadcasts in `tick.ts` switch from synthetic values to real FRED-derived numbers.
+- [x] **`packages/data-plane/`** — Bun/HTTP service with FRED ingestion. `GET /healthz`, `GET /snapshot/:fips`, `GET /snapshots`, `POST /refresh`. Fetches per-state `{ABBR}UR` (monthly unemployment) and `{ABBR}PCPI` (annual per-capita personal income). Disk-backed cache at `.data/data-plane-cache.json` survives restart. Refresh interval 1h (FRED state series tick monthly).
+- [x] **Rate-limited correctly** — Phase 2 surfaced a real bug in the original token-bucket: concurrent waiters each refilled and resolved without checking tokens, leaking ~5 req/sec at a configured 1.33. Replaced with a serial promise-chain limiter that enforces a strict minimum interval between releases ([`packages/data-plane/src/rate-limit.ts`](../packages/data-plane/src/rate-limit.ts)). Configured at 1 req/sec (60/min budget vs FRED's documented 120/min). FRED 429/5xx retry-with-backoff per fetch. **Result: 0 upstream failures across all 104 requests** (was 84 before the fix).
+- [x] **Each agent reads its state's snapshot every tick** ([`tick.ts`](../packages/agent/src/tick.ts) → [`data-plane-client.ts`](../packages/agent/src/data-plane-client.ts)). Tick skips broadcast if no snapshot is available yet — never fakes data per the project non-goals.
+- [x] **Indicator broadcasts use real FRED data** — `pickBroadcastIndicator` selects the freshest available, source string is the FRED series ID (e.g. `FRED:MAUR`). Phase 2 verified MA broadcasting `unemployment=4.8 (FRED:MAUR, observed 2026-02-01)` to its 4 peers.
 
-#### Phase 2 gate
+#### Per-state AgentCards
 
-A 5-agent mesh sustains for 1 hour with each agent broadcasting a real FRED-derived indicator each tick, reasoning over a peer's proposal via Claude, persisting decisions to 0G Storage, and AgentCards browsable per state. Commit `phase-2-memory-reasoning`.
+- [x] **AgentCards now persona-driven** ([`packages/agent/src/a2a/card.ts`](../packages/agent/src/a2a/card.ts)) — `description` field uses the persona's `tagline` per state (e.g. MA: *"Tech-revenue-correlated treasurer with strong reserves; biased toward active coalition leadership in the Northeast."*), 5 skills advertised. Browsable via `GET http://localhost:9002/a2a/{peer_id}` over AXL — judges can list a peer's capabilities cold.
+
+#### Phase 2 gate — ✅ 13/13 PASS
+
+[`scripts/test-phase2-gate.sh`](../scripts/test-phase2-gate.sh):
+
+```
+✓ data plane has 52 states loaded
+✓ MA snapshot has 2 populated indicator(s)
+✓ memory/{ma,ca,tx,ny,fl}/state.json present (tickCount>0)
+✓ MA broadcast log contains FRED-sourced indicator
+✓ at least one agent has a reflection log entry
+✓ MA AgentCard has persona-driven tagline (5 skills advertised)
+✓ negotiate round 1: state=input-required
+✓ negotiate round 2: state=completed with settlement payload
+✓ participate-in-coalition completed (responder kind=joined)
+```
+
+**Bugs surfaced + fixed during the Phase 2 run:**
+1. Token bucket rate limiter race (described above).
+2. `LocalDiskMemory` resolved memory under `process.cwd()` which is the package dir (because the mesh runner `cd`s into `packages/agent/` before `bun run`). Added `MEMORY_ROOT` env var honored by memory.ts and exported by [`scripts/run-local-mesh.sh`](../scripts/run-local-mesh.sh) → `<repo-root>/memory`.
+3. AgentCard probe path — AXL forwards `/a2a/{peer}` to `/.well-known/agent-card.json` server-side; the probe was double-appending it.
+
+**Deliverable:** 5-agent mesh on bare Bun processes with real FRED data, reasoner-driven negotiation + 4 additional A2A skills, persona-driven AgentCards, per-agent disk memory, and a working reflection loop. Commit `phase-2-memory-reasoning`.
 
 ### Phase 3 — Settlement (Day 3)
 
@@ -1045,13 +1105,13 @@ INFT_DEPLOYER_PRIVATE_KEY # for minting iNFTs (Phase 5)
 
 | API | Limit | Strategy |
 |---|---|---|
-| FRED | 120 req/min | Single ingestion service, in-memory cache, refresh per series 1x/hour |
-| BLS | 500 req/day registered | Batch all series into single daily call, cache locally |
-| BEA | Generous | Pull state-level GDP quarterly |
-| Census | Generous | Pull annual data once at start, cache forever |
-| GDELT | None published, be polite | Poll every 15 min, dedupe by article hash |
-| NOAA | Generous | Poll storm events daily |
-| OpenRouter | Per-model + account credits | **All 50 agents are LLM-driven** — keeps the thesis honest. Tier by model: `anthropic/claude-opus-4-7` for the ~10 deep agents (full skill set, initiate strategies), `anthropic/claude-haiku-4-5` for the ~40 observers (persona-driven, respond to incoming proposals, don't initiate coalitions). At ~5K tokens/tick × 40 observers × 24 ticks/day, Haiku across observers is roughly $5-10/day. Only fall back to rule-based logic in a cost emergency. |
+| FRED | 120 req/min documented; **observed 429s well below that** | Phase 2 ✅ — single ingestion service ([`packages/data-plane`](../packages/data-plane/)), in-memory + disk cache, refresh per series 1x/hour. Rate-limited at **1 req/sec** (60/min) via a serial-chain min-interval limiter (an earlier token-bucket draft had a concurrent-waiter race that leaked ~5 req/sec). 429/5xx retry-with-backoff per fetch. Result: 0 upstream failures across 104 reqs/refresh. |
+| BLS | 500 req/day registered | Batch all series into single daily call, cache locally (Phase 4) |
+| BEA | Generous | Pull state-level GDP quarterly (Phase 4) |
+| Census | Generous | Pull annual data once at start, cache forever (Phase 4) |
+| GDELT | None published, be polite | Poll every 15 min, dedupe by article hash (Phase 4) |
+| NOAA | Generous | Poll storm events daily (Phase 4) |
+| OpenRouter | Per-preset + account credits | Phase 2 ✅ — **all 50 agents are LLM-driven** via OpenRouter *presets*: agent code references `@preset/<slug>` (env: `OPENROUTER_PRESET_DEEP` / `OPENROUTER_PRESET_OBSERVER`); the preset binds *model + sampling params* in the OpenRouter UI, while **the system prompt lives in code** ([`packages/agent/src/system-prompts.ts`](../packages/agent/src/system-prompts.ts)) so it tracks in git. Default tier mapping: deep → Claude Opus 4.7, observer → Claude Haiku 4.5; the Phase 2 hackathon run uses Gemini 3 Flash on both presets as a cost-down. Per-call retry-with-backoff on 429/5xx in [`reason.ts`](../packages/agent/src/reason.ts). |
 | Uniswap Trading API | Generous on dev tier | Quote before every swap, no batch cleverness needed |
 | 0G Storage | Testnet, watch for instability | Retry with exponential backoff, fall back to local cache + replay |
 
@@ -1176,9 +1236,10 @@ To prove "intelligence is embedded": the demo includes a step where we transfer 
 | `/topology.tree` lags for non-hub nodes | ~~Medium~~ → Resolved (Phase 1 ✅) | Yggdrasil's spanning tree is eventually-consistent; non-hub agents under-report the mesh for several minutes. Routing works regardless. Phase 1 layered an `share_topology` MCP tool + `MeshDiscovery` 1-hop gossip loop on top, which converges in ≤10s and bridges the gap without changing AXL. See [`packages/agent/src/discovery.ts`](../packages/agent/src/discovery.ts). |
 | Unichain Sepolia RPC flaky during demo | Medium | Pre-seed pools and balances before demo. Have backup recording of working demo as failsafe. |
 | 0G testnet down during minting | Low-medium | Mint Phase 5, not Phase 7. Have backup of pre-minted iNFT data ready. |
-| Claude rate limits hit on demo | Low | 8 deep agents at 1hr tick is well under limits. Pre-warm caches. |
+| Claude rate limits hit on demo | Low | 8 deep agents at 1hr tick is well under limits. Pre-warm caches. Phase 2 swapped to OpenRouter presets so model can be downgraded (Gemini 3 Flash today) without code changes. |
 | Frontend deck.gl performance at 50 states + arcs | Medium | Throttle arc animations, only render arcs for last 30s of swaps. |
-| FRED/BLS API key revoked or rate-limited | Low | Cache last successful pull; fall back to last-known values rather than fake data. |
+| FRED/BLS API key revoked or rate-limited | ~~Low~~ → ~Low (Phase 2 hardened) | Phase 2 ships single shared ingestion service with serial-chain rate limiter (1 req/sec), 429/5xx retry-with-backoff, in-memory + disk cache. Last-known values served from cache when upstream is unreachable; agents skip the broadcast tick rather than fake data. |
+| Token-bucket rate limiter over-issued requests under concurrency | ~~Surfaced in Phase 2~~ → Resolved (Phase 2 ✅) | Concurrent waiters each refilled and resolved without checking tokens, leaking ~5 req/sec at a configured 1.33 → wall of FRED 429s on first refresh. Replaced with serial promise-chain min-interval limiter ([`packages/data-plane/src/rate-limit.ts`](../packages/data-plane/src/rate-limit.ts)). |
 | Fly.io machine crashes mid-demo | Low | Auto-restart enabled. Mesh is designed to route around dead nodes — that's a feature, not a bug, and we demo it intentionally. |
 | Out of time to finish all primitives | High | Tier 1 is must-ship, Tier 2 is should-ship, Tier 3+ are stretch. Hard cuts at end of Day 4 — anything not started by then doesn't ship. |
 

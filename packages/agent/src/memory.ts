@@ -72,10 +72,7 @@ export class LocalDiskMemory implements AgentMemory {
   private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(opts: LocalDiskMemoryOptions) {
-    const root =
-      opts.rootDir ??
-      process.env.MEMORY_ROOT ??
-      resolve(process.cwd(), 'memory');
+    const root = opts.rootDir ?? process.env.MEMORY_ROOT ?? resolve(process.cwd(), 'memory');
     const dir = resolve(root, opts.agentKey);
     this.stateFile = resolve(dir, 'state.json');
     this.logFile = resolve(dir, 'log.jsonl');
