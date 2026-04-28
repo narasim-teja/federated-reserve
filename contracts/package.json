@@ -1,0 +1,13 @@
+{
+  "name": "@federated-reserve/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phase 3 Solidity contracts: MockUSDC, StateToken, BondToken, INFT7857.",
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "5.1.0"
+  }
+}

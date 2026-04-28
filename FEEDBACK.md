@@ -167,6 +167,34 @@ and labels the friction or delight: `friction:` / `gotcha:` / `delight:` /
 
 _(placeholder — Spike 03 will populate this when we hit the Trading API)_
 
+## 2026-04-28 — Phase 3 settlement (Trading API integration)
+
+### Uniswap
+
+- **`delight:` (mainnet quote round-trip is dead simple)** — POSTing
+  `{tokenIn, tokenOut, amount, type, tokenInChainId, tokenOutChainId, swapper}`
+  to `/v1/quote` with `x-api-key` and `x-universal-router-version: 2.0`
+  headers returned a full CLASSIC quote with embedded Permit2 EIP-712
+  typed data in the first attempt. No SDK needed. The
+  `permitData.values.{details, spender, sigDeadline}` shape is exactly
+  what `viem.signTypedData` consumes — the cleanest API surface I've
+  hit on this hackathon. Probe: 1 USDC → WETH on Ethereum mainnet
+  (chain 1) returned a Permit2-ready quote in <500ms.
+
+- **`docs-gap:` (testnet support claim vs. reality)** — The official
+  supported-chains page (https://api-docs.uniswap.org/guides/supported_chains)
+  lists Unichain Sepolia (1301), Base Sepolia (84532), and Ethereum
+  Sepolia (11155111) as supported. But probing chain 1301 with mainnet
+  USDC/WETH addresses returns
+  `404 {"errorCode":"ResourceNotFound","detail":"No quotes available"}`.
+  This is _correct behavior_ (those addresses don't exist on testnet) —
+  but the error is identical to the one you'd get on a genuinely
+  unsupported chain. A more helpful response would distinguish "chain
+  unsupported" (e.g. 400 with `errorCode: ChainNotSupported`) from
+  "no liquidity for this pair" (the current 404). When you're trying to
+  validate testnet integration before deploying contracts, this
+  ambiguity costs an hour of debugging.
+
 ### 0G
 
 _(placeholder — Spike 05 will populate this when we deploy ERC-721 on 0G testnet)_

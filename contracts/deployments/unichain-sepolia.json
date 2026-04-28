@@ -1,0 +1,62 @@
+{
+  "chain": "unichain-sepolia",
+  "chainId": 1301,
+  "rpc": "https://sepolia.unichain.org",
+  "deployer": "0xB3B3b1F641295D57648B277737d67B1374071713",
+  "deployedAt": "2026-04-28T21:35:36.628Z",
+  "contracts": {
+    "MockUSDC": {
+      "address": "0x462b31b02e00d0dec2aeb79437e20e9fa3b96f94",
+      "decimals": 6
+    },
+    "StateTokens": {
+      "MA": {
+        "address": "0x7a87ff3dd531e79a2d08720374beb9670b9f2780",
+        "fips": 25,
+        "name": "Massachusetts Treasury Token",
+        "symbol": "MAT",
+        "decimals": 18,
+        "agent": "0x2926E2afC40a62829960C002eEe8F54eb4cEAC88"
+      },
+      "CA": {
+        "address": "0x0411752c54f84d35d99c55937fb70d66382b0645",
+        "fips": 6,
+        "name": "California Treasury Token",
+        "symbol": "CAT",
+        "decimals": 18,
+        "agent": "0xd842DEB4dbD49DD5e349a6959d8F6ee179726249"
+      },
+      "TX": {
+        "address": "0x4cdf222770c0231204446f3c516cb8664bd9948a",
+        "fips": 48,
+        "name": "Texas Treasury Token",
+        "symbol": "TXT",
+        "decimals": 18,
+        "agent": "0x6966b648c8F9F1B1Be96b4A89381651a0020cE8c"
+      },
+      "NY": {
+        "address": "0xb42274bbc44ffcacd746a5d5ebe7fcabfd9b53be",
+        "fips": 36,
+        "name": "New York Treasury Token",
+        "symbol": "NYT",
+        "decimals": 18,
+        "agent": "0x35755018070DE86339C00c04304C5D74408D700C"
+      },
+      "FL": {
+        "address": "0x03d93986991d5ee4c43528f02bffad1a54172c0e",
+        "fips": 12,
+        "name": "Florida Treasury Token",
+        "symbol": "FLT",
+        "decimals": 18,
+        "agent": "0x210b16F6516278Ce9decE09664FF3225E2fF0aa2"
+      }
+    },
+    "INFT7857": {
+      "address": "0xdad62bba075bc0193551c91cc5db79e558e5e5db"
+    }
+  },
+  "reserves": {
+    "perPoolUsdc": "100000000000",
+    "perPoolStateToken": "100000000000000000000000"
+  }
+}
