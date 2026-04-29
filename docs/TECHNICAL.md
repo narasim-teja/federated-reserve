@@ -1161,10 +1161,16 @@ message exchange. FEEDBACK.md updated with 6 Phase 3 entries
   the winner's `BondToken.mint` via the SwapExecutor, then resolves
   every parked task's promise with its own `BondAward` (winner gets
   mint metadata; losers get a clear rationale).
-- [ ] Coalition formation flow — A2A multi-turn negotiation that
-  converges on a coalition agreement. **Deferred to Phase 5+** (Phase 2's
-  single-round handler is sufficient for the live demo; multi-turn
-  is a polish item).
+- [x] **Multi-turn coalition formation flow** — A2A lifecycle
+  `Working → InputRequired (counter_terms) → revised_invite → Working
+  → Completed (joined|declined)`. Schemas in [`packages/shared/src/a2a-types.ts`](../packages/shared/src/a2a-types.ts)
+  (`coalitionCounterTermsSchema`, `coalitionRevisedInviteSchema`,
+  `coalitionResponseSchema` extended with `kind: "counter_terms"`).
+  Executor in [`packages/agent/src/a2a/executor.ts`](../packages/agent/src/a2a/executor.ts):
+  `handleCoalitionInvite` may emit `counter_terms` (large asks, no-affinity
+  but workable terms); `handleCoalitionRevisedInvite` makes the final
+  call (no further counters allowed). Reasoner-driven with deterministic
+  affinity fallback.
 - [x] Aid request → grant flow — `handleAidRequest` now fires
   `USDC.transfer(requester, amount)` on `offered`. Mirror of Phase 3
   bond settlement pattern. Failure of the on-chain leg does not fail
@@ -1176,35 +1182,75 @@ message exchange. FEEDBACK.md updated with 6 Phase 3 entries
   FED/TRS. Every node Listens on its own port AND Peers with every
   other node (full bidirectional), giving 18 peer entries in
   `/topology` per node post-convergence.
-- [ ] Add NOAA event ingestion to data plane — **deferred to Phase 5/6**.
+- [x] **NOAA active-alert ingestion (NWS)** — pulled from
+  `https://api.weather.gov/alerts/active` (no key required). Severity
+  derived from NWS `severity`+`urgency`+`certainty` → 1-10 scale.
+  Cached in `ShockCache` with disk persistence. Exposed via
+  `GET /shocks` and `GET /shocks/state/:fips`. The FED agent's tick
+  loop sweeps every `SHOCK_SWEEP_EVERY_N` ticks, picks unique active
+  shocks, resolves affected-state pubkeys, and fan-outs
+  `coordinate-shock-response` A2A to each — driving real
+  decentralized shock-response negotiation from a real-world feed.
+  `BLS_API_KEY`/`BEA_API_KEY`/`CENSUS_API_KEY` round out the
+  state-snapshot side: BLS LAUS for monthly employment count + labor
+  force, BEA SAGDP9N for quarterly real GDP + YoY growth derivation,
+  Census ACS5 for population + median household income + poverty rate.
+  Credit-rating function consumes the new fields (gdpGrowth bonus,
+  povertyRate + active shock pressure penalties).
 - [ ] Add GDELT state-tagged news ingestion — **deferred to Phase 5/6**.
-- [x] First shock injection test: synthetic hurricane signals →
-  affected states in parallel; gate test verifies structured
-  contributions (joining/abstaining + commitment).
+  (NOAA was the higher-priority shock source; GDELT for policy/market
+  news is on the polish list.)
+- [x] **Real shock injection test** — Phase 4 gate test 5 verifies the
+  full NOAA→A2A loop: data plane reports active shocks, FED's
+  `sweepNoaaShocksAndFanOut` fires `coordinate-shock-response` over
+  A2A to affected leaves, recipient memory log captures the inject
+  entry. The synthetic test (Phase 4 gate test 3) now runs as a
+  **true leaf→leaf** call (CA→FL) rather than the prior leaf→hub
+  workaround — both because the AXL `applyOverrides` bug is fixed
+  (see "Onchain artifacts" + FEEDBACK Phase 4 section) and because
+  leaf→leaf is the architectural promise.
 
-#### Phase 4 gate — ✅ 4/4 PASS
+#### Phase 4 gate — ✅ 7/7 PASS (post-AXL fix)
 
 [`scripts/test-phase4-gate.sh`](../scripts/test-phase4-gate.sh):
 
 ```
-✓ multi-bidder: CA won at 600bps, NY rejected (outbid), FL rejected (above ceiling)
+✓ mesh reachable, pubkeys resolved
+✓ multi-bidder: CA won at 600bps with mint_tx=0xf96ffc55…
+✓ multi-bidder: NY rejected (outbid), FL rejected (above ceiling)
 ✓ multi-bidder mint verified on-chain: CA received 1,000,000,000 bond units
-✓ aid offered with on-chain transfer (MA → CA, 500 USDC)
-✓ shock response: 3/3 structured contributions
-✓ federal rate broadcast received by at least one peer (10 broadcasts seen)
+✓ aid offered with on-chain transfer tx=0xce0fdba1…
+✓ aid settlement verified: MA→CA 500,000,000 USDC base units
+✓ shock-leaf-leaf: FL responded joining (commitment $0); leaf→leaf routing PROVEN
+✓ coalition-mt: NY single-shot joined (multi-turn lifecycle wired; counter path
+                  available, this run took the direct branch)
+✓ federal rate broadcast received by at least one peer (16 broadcasts seen)
+✓ NOAA loop: FED logged noaa_shock_inject after sweep (data plane → FED → A2A)
 ```
 
-#### Known issue surfaced
+The gate now drives a **true leaf→leaf shock signal** (CA → FL) rather
+than the Phase 4 initial-cut leaf→hub workaround.
 
-- **AXL leaf→leaf A2A routing**: when CA dials `/a2a/{IL_pubkey}`, the
-  request silently delivers to MA (the bootstrap) rather than IL.
-  MCP routing on the same key works correctly (MCP returns IL data),
-  so this is an A2A-stream-specific routing issue in the local 10-node
-  mesh. Phase 3 already documented the analogous hub→leaf direction;
-  the gate test workaround is to issue all A2A traffic to MA's pubkey
-  (leaf→hub, which routes reliably). Production deploy on Fly.io with
-  full geographic peering should not exhibit this localhost gVisor
-  artifact, but the issue is on the FEEDBACK list for AXL upstream.
+#### Known issue resolved (was the "leaf→leaf misroute")
+
+- **AXL `cmd/node/config.go` was silently dropping `a2a_port`
+  overrides.** The `applyOverrides` function applied every other field
+  (`tcp_port`, `api_port`, `router_port`, `router_addr`, `bridge_addr`,
+  `a2a_addr`, security limits, ...) but **not `a2a_port`**. So every
+  AXL node fell back to `defaultA2APort = 9004`. Each agent host's
+  AXL bridge then forwarded inbound `/a2a/{peer}` traffic to
+  `http://127.0.0.1:9004` — which on a single-host mesh is the
+  bootstrap MA's A2A server. Effect: every leaf→leaf, hub→leaf, and
+  leaf→hub call (except MA→MA, by accident) returned MA's AgentCard
+  / executed on MA's executor. The bug was misread as a Yggdrasil
+  routing issue.
+  Fix: add the missing `if ov.A2APort != 0 { base.A2APort = ov.A2APort }`
+  in [`vendor/axl/cmd/node/config.go`](../vendor/axl/cmd/node/config.go).
+  Verified by [`scripts/diag-axl-routing.ts`](../scripts/diag-axl-routing.ts):
+  56/56 leaf↔leaf AgentCard probes resolve correctly post-fix
+  (was 7/56 pre-fix — the only "correct" pairs were leaf→MA, also by
+  accident). Reported upstream; full incident in
+  [FEEDBACK.md](../FEEDBACK.md) Phase 4 section.
 
 **Deliverable:** 10 agents running concurrently in mesh, real federal
 mechanics, 8 onchain StateTokens + pools, multi-bidder bond auction

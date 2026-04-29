@@ -10,6 +10,68 @@ and labels the friction or delight: `friction:` / `gotcha:` / `delight:` /
 
 ---
 
+## 2026-04-29 — Phase 4 hardening
+
+### AXL
+
+- **`bug:` (silent A2APort config drop in `cmd/node/config.go`)** —
+  Each AXL node's `node-config.json` includes `a2a_port` (we used 9004
+  for MA, 9014 for CA, 9024 for TX, ...). The config loader's
+  `applyOverrides` function applies overrides for `TCPPort`, `ApiPort`,
+  `McpRouterPort`, `McpRouterAddr`, `BridgeAddr`, `A2AAddr`, etc. — but
+  is **missing the `A2APort` override**. So no matter what the config
+  file says, every node uses `defaultA2APort = 9004`.
+  Effect: in a multi-node mesh on a single host, every leaf's AXL node
+  forwards inbound `/a2a/{peer}` traffic to `http://127.0.0.1:9004` —
+  which is the bootstrap (MA)'s A2A server. **Every leaf→leaf,
+  hub→leaf, and leaf→hub A2A request silently lands on MA's A2A
+  server**, and MA returns its own AgentCard / executes its own
+  `negotiate-bilateral-swap` / `bond-auction` etc. The bug is invisible
+  in single-node tests (`defaultA2APort` happens to match the only A2A
+  port) and can be misread as a Yggdrasil routing issue (we initially
+  suspected leaf→leaf packet routing was broken; it was not).
+  Fix:
+  ```go
+  if ov.A2APort != 0 {
+      base.A2APort = ov.A2APort
+  }
+  ```
+  in `vendor/axl/cmd/node/config.go`. Confirmed by
+  `scripts/diag-axl-routing.ts`: 56/56 leaf↔leaf AgentCard probes
+  resolve to the correct peer post-fix (was 7/56 — only the leaf→MA
+  pairs were correct, by accident, since MA's a2a_port and the global
+  default are both 9004). Reported upstream.
+
+### Data sources
+
+- **`delight:` (BEA Regional + Census ACS + NWS active alerts)** —
+  Adding BLS LAUS / BEA Regional / Census ACS 5-year / NWS Active
+  Alerts on top of the FRED skeleton was the smoothest part of Phase 4.
+  Each lives in its own module under `packages/data-plane/src/sources/`
+  with its own rate limiter; the scheduler unions per-FIPS results into
+  a single `StateSnapshot`. NWS active alerts is an unmasked goldmine
+  for "is there a real shock right now?" — we drove the FED's
+  `coordinate-shock-response` A2A fan-out from it on a 2-tick cadence,
+  and the live demo shows real flood warnings going from
+  `api.weather.gov` → data plane → FED's tick loop → A2A skill →
+  IL/WA/TX agents → on-chain aid response, in under 30 seconds.
+
+- **`gotcha:` (BLS series-id padding)** — BLS LAUS series IDs use a
+  leading `LAUS` + 2-digit zero-padded state FIPS + `0000000000` +
+  measure code. AL is `LAUS01...03`, MA is `LAUS25...03`. Forgetting
+  the leading zero on single-digit-FIPS states returns a 200 with an
+  empty series array, not a 4xx. Catch this with a snapshot test:
+  ≥ 50 populated series after a refresh.
+
+- **`gotcha:` (NWS SAME codes)** — NWS active alerts include
+  `geocode.SAME` arrays of 6-digit county FIPS codes (a leading
+  zero-padding digit + 2-digit state FIPS + 3-digit county). We strip
+  and rollup to state in `packages/data-plane/src/sources/noaa.ts`.
+  The full county-level data is also useful for sub-state targeting
+  (Phase 5/6 will surface it on the deck.gl county polygons).
+
+---
+
 ## 2026-04-27 — Phase 0 setup
 
 ### AXL

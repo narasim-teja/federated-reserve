@@ -42,7 +42,45 @@ export interface DataPlaneHealth {
   states_total: number;
   last_refresh_at: string | null;
   upstream_failures_last_hour: number;
+  /**
+   * Per-source liveness — agents can detect "FRED stale, BEA fresh" so the
+   * reasoner knows what context is current vs cached.
+   */
+  sources?: Record<string, { last_refresh_at: string | null; last_error: string | null }>;
+  /** Phase 4+: how many NOAA shock events the data plane has cached. */
+  shocks_loaded?: number;
 }
+
+/**
+ * NOAA Storm Events — recent named events (tornado, hurricane, flood, etc.)
+ * keyed by FIPS code. Drives `coordinate-shock-response` A2A fan-out: the
+ * data plane caches the last N events; agents (esp. FED's tick loop) read
+ * `/shocks` and emit `shock_event` broadcasts → affected states converge.
+ */
+export const shockEventSchema = z.object({
+  /** Stable id derived from NOAA `EVENT_ID` so dedup across refreshes works. */
+  event_id: z.string(),
+  /** Affected state's FIPS code (NOAA reports per state). */
+  state_fips: z.number().int(),
+  state_abbr: z.string(),
+  /** NOAA `EVENT_TYPE` like "Hurricane", "Tornado", "Flash Flood". */
+  event_type: z.string(),
+  /** "natural_disaster" | "market_shock" | "policy_shock" — derived. */
+  shock_kind: z.enum(['natural_disaster', 'market_shock', 'policy_shock']),
+  /** Severity 1-10 derived from damage estimates and casualty counts. */
+  severity: z.number().int().min(1).max(10),
+  /** ISO-8601 begin date of the event. */
+  begin_date: z.string(),
+  /** ISO-8601 end date of the event (may equal begin). */
+  end_date: z.string(),
+  /** USD property damage estimate, when reported. */
+  property_damage_usd: z.number().nullable(),
+  /** Direct + indirect deaths reported. */
+  deaths: z.number().int().nullable(),
+  /** Free-form narrative (truncated). */
+  narrative: z.string(),
+});
+export type ShockEvent = z.infer<typeof shockEventSchema>;
 
 /**
  * Pick first available indicator for broadcasting from a snapshot.

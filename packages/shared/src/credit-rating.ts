@@ -49,6 +49,13 @@ export interface CreditInputs {
   personalIncomeUsd: number | null;
   /** Region (e.g. 'northeast', 'south'). */
   region: string;
+  /** Optional Phase 4+ extras — improve scoring fidelity when available. */
+  /** YoY GDP growth from BEA SAGDP (%). Boosts score when positive. */
+  gdpGrowthPct?: number | null;
+  /** Census poverty rate (%). Penalizes score when high. */
+  povertyRatePct?: number | null;
+  /** Active shock pressure 0..10 (max severity of a NOAA event affecting this state). */
+  shockPressure?: number | null;
 }
 
 export interface CreditAssessment {
@@ -119,7 +126,26 @@ export function assessCredit(abbr: string, inputs: CreditInputs): CreditAssessme
   const u = unemploymentScore(inputs.unemploymentPct);
   const i = incomeScore(inputs.personalIncomeUsd);
   const penalty = personaPenalty(abbr);
-  const score = Math.max(0, Math.min(100, r + u + i - penalty));
+
+  // Phase 4+ refinements — small, additive, capped so the legacy path still passes.
+  let bonus = 0;
+  if (typeof inputs.gdpGrowthPct === 'number' && Number.isFinite(inputs.gdpGrowthPct)) {
+    // -3% → -3, 0 → 0, +3% → +3, capped ±5
+    bonus += Math.max(-5, Math.min(5, inputs.gdpGrowthPct));
+  }
+  let extraPenalty = 0;
+  if (typeof inputs.povertyRatePct === 'number' && Number.isFinite(inputs.povertyRatePct)) {
+    // 8% → 0, 12% → -2, 18%+ → -5
+    if (inputs.povertyRatePct > 8) {
+      extraPenalty += Math.min(5, (inputs.povertyRatePct - 8) / 2);
+    }
+  }
+  if (typeof inputs.shockPressure === 'number' && Number.isFinite(inputs.shockPressure)) {
+    // sev 0 → 0, sev 5 → -3, sev 10 → -6
+    extraPenalty += Math.max(0, Math.min(6, inputs.shockPressure * 0.6));
+  }
+
+  const score = Math.max(0, Math.min(100, r + u + i + bonus - penalty - extraPenalty));
 
   const tier = RATING_TABLE.find((t) => score >= t.minScore) ?? RATING_TABLE[RATING_TABLE.length - 1];
   if (!tier) {

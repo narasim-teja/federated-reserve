@@ -21,6 +21,7 @@ import {
   JsonRpcTransportHandler,
 } from '@a2a-js/sdk/server';
 import type { AgentConfig } from '../config.ts';
+import type { DataPlaneClient } from '../data-plane-client.ts';
 import type { SwapExecutor } from '../execute.ts';
 import type { Reasoner } from '../reason.ts';
 import type { AgentState } from '../state.ts';
@@ -39,6 +40,7 @@ export function startA2aServer(
   reasoner?: Reasoner,
   systemPrompt?: string,
   swapExecutor?: SwapExecutor,
+  dataPlane?: DataPlaneClient,
 ): A2aServerHandle {
   const agentCard = buildAgentCard(cfg);
   const taskStore = new InMemoryTaskStore();
@@ -48,6 +50,7 @@ export function startA2aServer(
     reasoner,
     systemPrompt,
     swapExecutor,
+    dataPlane,
   );
   const requestHandler = new DefaultRequestHandler(agentCard, taskStore, executor);
   const transport = new JsonRpcTransportHandler(requestHandler);

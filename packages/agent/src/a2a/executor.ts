@@ -44,6 +44,7 @@ import {
   resolveAsset,
   skillEnvelopeSchema,
 } from '@federated-reserve/shared';
+import type { DataPlaneClient } from '../data-plane-client.ts';
 import type { AgentConfig } from '../config.ts';
 import type { SwapExecutor } from '../execute.ts';
 import type { Reasoner } from '../reason.ts';
@@ -60,6 +61,36 @@ function applyBpsHaircut(amount: string, bps: number): string {
   const big = BigInt(amount);
   const haircut = (big * BigInt(10_000 - bps)) / 10_000n;
   return haircut.toString();
+}
+
+/**
+ * Render an indicator value with units appropriate to its kind so the reasoner
+ * sees "5.4%" instead of "5.4" for unemployment, "$58.2k" for income, etc.
+ */
+function formatIndicatorValue(kind: EconomicIndicatorKind, value: number): string {
+  switch (kind) {
+    case 'unemployment':
+    case 'gdp_growth':
+    case 'cpi':
+    case 'poverty_rate':
+      return `${value.toFixed(2)}%`;
+    case 'personal_income':
+    case 'median_household_income':
+      return `$${(value / 1000).toFixed(1)}k`;
+    case 'employment_count':
+    case 'labor_force':
+    case 'population':
+      return value.toLocaleString();
+    case 'gdp_quarterly':
+    case 'gdp_annual':
+    case 'personal_income_total':
+      // BEA reports in $M (chained or current).
+      return `$${(value / 1000).toFixed(1)}B`;
+    case 'tax_revenue':
+    case 'reserve_ratio':
+    default:
+      return value.toString();
+  }
 }
 
 function findDataPart(message: Message): DataPart | undefined {
@@ -92,6 +123,7 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     private readonly reasoner?: Reasoner,
     private readonly systemPrompt: string = '',
     private readonly swapExecutor?: SwapExecutor,
+    private readonly dataPlane?: DataPlaneClient,
   ) {
     this.bondAuctions = new BondAuctionRegistry({
       windowMs: cfg.bondAuction.windowMs,
@@ -128,7 +160,16 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       const env = parsed.data;
       switch (env.skill) {
         case 'participate-in-coalition':
-          await this.handleCoalitionInvite(ctx, bus, env);
+          // Multi-turn: dispatch initial vs revised
+          if ('kind' in env && env.kind === 'revised_invite') {
+            await this.handleCoalitionRevisedInvite(ctx, bus, env);
+          } else {
+            await this.handleCoalitionInvite(
+              ctx,
+              bus,
+              env as Extract<typeof env, { initiator_fips: number; topic: string; proposed_contribution_usd: number }>,
+            );
+          }
           return;
         case 'bond-auction':
           await this.handleBondBid(ctx, bus, env);
@@ -362,10 +403,13 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     their_rationale: string;
     round: number;
   }): Promise<ReasonerDecision> {
+    const fedLine = this.fedRateContextLine();
     const userMessage = [
       `Skill: negotiate-bilateral-swap. Round ${args.round} of ${MAX_NEGOTIATION_ROUNDS}.`,
       this.treasuryContextLine(),
       `Latest indicators: ${this.recentIndicatorsSummary()}`,
+      `Peer signals (recent): ${this.peerIndicatorsLine()}`,
+      fedLine,
       args.phase === 'proposal'
         ? 'A counterparty has sent you a swap PROPOSAL. They want to give you `their_give` in exchange for receiving `their_receive` from you.'
         : 'A counterparty has sent you a COUNTER. The terms below are what they now propose; you may accept, counter-counter, or reject.',
@@ -380,7 +424,9 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       '',
       'If action="counter", include `give` and `receive` (your terms). Use the same asset symbols. Keep amount as a numeric string of integer base units.',
       'If action="accept" or "reject", set give and receive to null.',
-    ].join('\n');
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     if (!this.reasoner) throw new Error('reasoner not configured');
     const result = await this.reasoner.reasonJson<ReasonerDecision>({
@@ -400,7 +446,7 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     bus: ExecutionEventBus,
     env: Extract<
       import('@federated-reserve/shared').SkillEnvelope,
-      { skill: 'participate-in-coalition' }
+      { skill: 'participate-in-coalition'; topic: string }
     >,
   ): Promise<void> {
     bus.publish({
@@ -412,40 +458,49 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     } satisfies Task);
 
     const affinity = hasCoalitionAffinity(this.cfg.state.abbr, env.coalition_tag);
+    const decision = await this.askCoalitionReasoner({
+      coalition_tag: env.coalition_tag,
+      topic: env.topic,
+      proposed_contribution_usd: env.proposed_contribution_usd,
+      duration_days: env.duration_days ?? null,
+      can_counter: true,
+    });
 
     let response: CoalitionResponse;
-    if (this.reasoner && this.cfg.reasoningEnabled) {
-      try {
-        const prompt = [
-          'Skill: participate-in-coalition. A peer is inviting you to join a coalition.',
-          `Coalition tag: ${env.coalition_tag}. Topic: "${env.topic}". Proposed contribution: $${env.proposed_contribution_usd}.`,
-          this.treasuryContextLine(),
-          'Decide whether to join. Respond ONLY with JSON:',
-          '{ "kind": "joined" | "declined", "contribution_usd": <number>, "rationale": "<one sentence>" }',
-          'If joining, contribution_usd may match or differ from proposal. If declining, set contribution_usd to 0.',
-        ].join('\n');
-        const result = await this.reasoner.reasonJson<{
-          kind: 'joined' | 'declined';
-          contribution_usd: number;
-          rationale: string;
-        }>({
-          tier: this.cfg.state.tier,
-          system: this.systemPrompt,
-          messages: [{ role: 'user', content: prompt }],
-        });
-        response = {
-          skill: 'participate-in-coalition',
-          kind: result.value.kind,
-          responder_fips: this.cfg.state.fips,
-          contribution_usd: result.value.contribution_usd,
-          rationale: result.value.rationale,
-        };
-      } catch (err) {
-        console.warn(`[${this.cfg.state.abbr}] coalition reasoner failed; using affinity fallback`);
-        response = this.coalitionFallback(env, affinity);
-      }
+    if (decision) {
+      response = {
+        skill: 'participate-in-coalition',
+        kind: decision.kind,
+        responder_fips: this.cfg.state.fips,
+        contribution_usd: decision.contribution_usd ?? 0,
+        rationale: decision.rationale,
+        ...(decision.kind === 'counter_terms'
+          ? {
+              preferred_contribution_usd: decision.preferred_contribution_usd,
+              preferred_duration_days: decision.preferred_duration_days,
+            }
+          : {}),
+      };
     } else {
       response = this.coalitionFallback(env, affinity);
+    }
+
+    // Multi-turn: counter_terms → InputRequired, awaiting revised_invite.
+    // joined/declined → Completed.
+    if (response.kind === 'counter_terms') {
+      bus.publish({
+        kind: 'status-update',
+        taskId: ctx.taskId,
+        contextId: ctx.contextId,
+        status: {
+          state: 'input-required',
+          message: this.dataMessage(ctx, response),
+          timestamp: isoNow(),
+        },
+        final: false,
+      } satisfies TaskStatusUpdateEvent);
+      bus.finished();
+      return;
     }
 
     bus.publish({
@@ -458,21 +513,169 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     bus.finished();
   }
 
-  private coalitionFallback(
+  /**
+   * Phase 4 — initiator's revised proposal arrives on the existing task.
+   * Responder makes a final accept/decline call (no more counters allowed).
+   */
+  private async handleCoalitionRevisedInvite(
+    ctx: RequestContext,
+    bus: ExecutionEventBus,
     env: Extract<
       import('@federated-reserve/shared').SkillEnvelope,
-      { skill: 'participate-in-coalition' }
+      { skill: 'participate-in-coalition'; kind: 'revised_invite' }
     >,
+  ): Promise<void> {
+    if (!ctx.task) {
+      this.failTask(ctx, bus, 'revised_invite requires existing task — initial invite missing');
+      return;
+    }
+
+    const affinity = hasCoalitionAffinity(this.cfg.state.abbr, env.coalition_tag);
+    const decision = await this.askCoalitionReasoner({
+      coalition_tag: env.coalition_tag,
+      topic: env.topic,
+      proposed_contribution_usd: env.proposed_contribution_usd,
+      duration_days: env.duration_days ?? null,
+      can_counter: false, // final round — must accept or decline
+    });
+
+    let response: CoalitionResponse;
+    if (decision && decision.kind !== 'counter_terms') {
+      response = {
+        skill: 'participate-in-coalition',
+        kind: decision.kind,
+        responder_fips: this.cfg.state.fips,
+        contribution_usd: decision.contribution_usd ?? 0,
+        rationale: decision.rationale,
+      };
+    } else {
+      // Reasoner refused or gave a counter we can't honor; fall back.
+      response = this.coalitionFallback(
+        {
+          coalition_tag: env.coalition_tag,
+          proposed_contribution_usd: env.proposed_contribution_usd,
+          duration_days: env.duration_days,
+        },
+        affinity,
+      );
+      // Coerce any counter from fallback to a join/decline since we're terminal.
+      if (response.kind === 'counter_terms') {
+        response = {
+          ...response,
+          kind: affinity ? 'joined' : 'declined',
+          contribution_usd: affinity ? env.proposed_contribution_usd : 0,
+        };
+      }
+    }
+
+    bus.publish({
+      kind: 'status-update',
+      taskId: ctx.taskId,
+      contextId: ctx.contextId,
+      status: { state: 'completed', message: this.dataMessage(ctx, response), timestamp: isoNow() },
+      final: true,
+    } satisfies TaskStatusUpdateEvent);
+    bus.finished();
+  }
+
+  private async askCoalitionReasoner(args: {
+    coalition_tag: string;
+    topic: string;
+    proposed_contribution_usd: number;
+    duration_days: number | null;
+    can_counter: boolean;
+  }): Promise<{
+    kind: 'joined' | 'declined' | 'counter_terms';
+    contribution_usd?: number;
+    preferred_contribution_usd?: number;
+    preferred_duration_days?: number;
+    rationale: string;
+  } | null> {
+    if (!this.reasoner || !this.cfg.reasoningEnabled) return null;
+    const persona = getPersona(this.cfg.state.abbr);
+    const optionsLine = args.can_counter
+      ? '"joined" | "declined" | "counter_terms"'
+      : '"joined" | "declined"';
+    const counterFields = args.can_counter
+      ? '  "preferred_contribution_usd": <number, only if counter_terms>,\n  "preferred_duration_days": <int days, optional>,'
+      : '';
+    const fedLine = this.fedRateContextLine();
+    const prompt = [
+      'Skill: participate-in-coalition. A peer is inviting you to join a coalition.',
+      `Coalition tag: ${args.coalition_tag}. Topic: "${args.topic}".`,
+      `Proposed contribution: $${args.proposed_contribution_usd}` +
+        (args.duration_days ? ` over ${args.duration_days} days.` : '.'),
+      `Your coalition affinities: [${persona.coalitions.join(', ')}].`,
+      this.treasuryContextLine(),
+      `Your indicators: ${this.recentIndicatorsSummary()}`,
+      fedLine,
+      args.can_counter
+        ? 'You may COUNTER if the terms are workable but the contribution or duration needs revision.'
+        : 'This is a REVISED proposal — make a final commitment (joined or declined). Counter-terms are NOT allowed at this stage.',
+      `Respond ONLY with JSON of shape:\n{\n  "kind": ${optionsLine},\n  "contribution_usd": <number>,\n${counterFields}\n  "rationale": "<one short sentence>"\n}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    try {
+      const result = await this.reasoner.reasonJson<{
+        kind: 'joined' | 'declined' | 'counter_terms';
+        contribution_usd?: number;
+        preferred_contribution_usd?: number;
+        preferred_duration_days?: number;
+        rationale: string;
+      }>({
+        tier: this.cfg.state.tier,
+        system: this.systemPrompt,
+        messages: [{ role: 'user', content: prompt }],
+      });
+      // If the reasoner ignored `can_counter=false` and asked to counter,
+      // demote to join/decline.
+      if (!args.can_counter && result.value.kind === 'counter_terms') {
+        return {
+          kind: 'declined',
+          contribution_usd: 0,
+          rationale: `${this.cfg.state.abbr} declines after revised round (counters not permitted).`,
+        };
+      }
+      return result.value;
+    } catch (err) {
+      console.warn(`[${this.cfg.state.abbr}] coalition reasoner failed: ${String(err)}`);
+      return null;
+    }
+  }
+
+  private coalitionFallback(
+    env: { coalition_tag: string; proposed_contribution_usd: number; duration_days?: number },
     affinity: boolean,
   ): CoalitionResponse {
+    // Heuristic: affinity → join. Big asks ($1M+) trigger a counter at half
+    // the original. Otherwise decline.
+    if (affinity) {
+      if (env.proposed_contribution_usd > 1_000_000) {
+        return {
+          skill: 'participate-in-coalition',
+          kind: 'counter_terms',
+          responder_fips: this.cfg.state.fips,
+          contribution_usd: 0,
+          preferred_contribution_usd: Math.floor(env.proposed_contribution_usd / 2),
+          preferred_duration_days: env.duration_days,
+          rationale: `${this.cfg.state.abbr} aligned with ${env.coalition_tag} but proposes 50% reduced contribution.`,
+        };
+      }
+      return {
+        skill: 'participate-in-coalition',
+        kind: 'joined',
+        responder_fips: this.cfg.state.fips,
+        contribution_usd: env.proposed_contribution_usd,
+        rationale: `${this.cfg.state.abbr} joins on natural affinity with ${env.coalition_tag}.`,
+      };
+    }
     return {
       skill: 'participate-in-coalition',
-      kind: affinity ? 'joined' : 'declined',
+      kind: 'declined',
       responder_fips: this.cfg.state.fips,
-      contribution_usd: affinity ? env.proposed_contribution_usd : 0,
-      rationale: affinity
-        ? `${this.cfg.state.abbr} joins on natural affinity with ${env.coalition_tag}.`
-        : `${this.cfg.state.abbr} declines: no affinity with ${env.coalition_tag}.`,
+      contribution_usd: 0,
+      rationale: `${this.cfg.state.abbr} declines: no affinity with ${env.coalition_tag}.`,
     };
   }
 
@@ -536,7 +739,7 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     bondId: string,
     bids: ReadonlyArray<BondBid>,
   ): Promise<BondAuctionEvaluation> {
-    const credit = this.assessOwnCredit();
+    const credit = await this.assessOwnCreditAsync();
     const floor = credit.yieldFloorBps;
     const ceiling = credit.yieldCeilingBps;
     console.log(
@@ -623,15 +826,47 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
   }
 
   /** Score this agent's own state for bond issuance pricing. */
-  private assessOwnCredit(): CreditAssessment {
+  private async assessOwnCreditAsync(): Promise<CreditAssessment> {
     const indicators = this.state.ownSnapshot?.indicators ?? {};
     const unemploymentPct = indicators.unemployment?.value ?? null;
-    const personalIncomeUsd = indicators.personal_income?.value ?? null;
+    // Prefer Census median household income; fall back to FRED PCPI.
+    const personalIncomeUsd =
+      indicators.median_household_income?.value ?? indicators.personal_income?.value ?? null;
+    const gdpGrowthPct = indicators.gdp_growth?.value ?? null;
+    const povertyRatePct = indicators.poverty_rate?.value ?? null;
+    let shockPressure: number | null = null;
+    if (this.dataPlane) {
+      try {
+        const events = await this.dataPlane.shocksForState(this.cfg.state.fips, 5);
+        if (events.length > 0) {
+          shockPressure = events.reduce((m, e) => Math.max(m, e.severity), 0);
+        }
+      } catch {
+        /* best-effort */
+      }
+    }
     return assessCredit(this.cfg.state.abbr, {
       reserveRatio: this.state.reserveRatio,
       unemploymentPct,
       personalIncomeUsd,
       region: this.cfg.state.region,
+      gdpGrowthPct,
+      povertyRatePct,
+      shockPressure,
+    });
+  }
+
+  /** Sync wrapper for paths that don't await (legacy code). */
+  private assessOwnCredit(): CreditAssessment {
+    const indicators = this.state.ownSnapshot?.indicators ?? {};
+    return assessCredit(this.cfg.state.abbr, {
+      reserveRatio: this.state.reserveRatio,
+      unemploymentPct: indicators.unemployment?.value ?? null,
+      personalIncomeUsd:
+        indicators.median_household_income?.value ?? indicators.personal_income?.value ?? null,
+      region: this.cfg.state.region,
+      gdpGrowthPct: indicators.gdp_growth?.value ?? null,
+      povertyRatePct: indicators.poverty_rate?.value ?? null,
     });
   }
 
@@ -742,14 +977,20 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     let response: AidResponse;
     if (this.reasoner && this.cfg.reasoningEnabled) {
       try {
-        const prompt = [
+        const requesterShocks = await this.activeShocksContextLine(env.requester_fips);
+        const fedLine = this.fedRateContextLine();
+        const promptParts = [
           'Skill: request-emergency-aid (you are evaluating an aid request from a peer).',
           `Requester FIPS ${env.requester_fips} asks for $${env.amount_usd}. Reason: "${env.reason}". Repayment terms: "${env.repayment_terms}".`,
           this.treasuryContextLine(),
-          'Decide whether to offer aid (full, partial, or decline).',
+          `Your indicators: ${this.recentIndicatorsSummary()}`,
+          fedLine,
+          requesterShocks ? `On the requester's state: ${requesterShocks}` : '',
+          'Decide whether to offer aid (full, partial, or decline). Active NOAA shock affecting the requester is a strong signal to offer.',
           'Respond ONLY with JSON: { "kind": "offered" | "declined", "amount_usd": <number>, "yield_bps": <int>, "rationale": "<one sentence>" }',
-          'If declining, amount_usd=0 and yield_bps=0. If offering, amount_usd ≤ requested, yield_bps reflects pricing.',
-        ].join('\n');
+          'If declining, amount_usd=0 and yield_bps=0. If offering, amount_usd ≤ requested, yield_bps reflects pricing relative to FED rate + requester credit.',
+        ];
+        const prompt = promptParts.filter(Boolean).join('\n');
         const result = await this.reasoner.reasonJson<{
           kind: 'offered' | 'declined';
           amount_usd: number;
@@ -919,15 +1160,23 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     let response: ShockContribution;
     if (this.reasoner && this.cfg.reasoningEnabled) {
       try {
+        const ourShocks = await this.activeShocksContextLine(this.cfg.state.fips);
+        const fedLine = this.fedRateContextLine();
+        const persona = getPersona(this.cfg.state.abbr);
         const prompt = [
           'Skill: coordinate-shock-response. A peer has signaled a shock and proposed a coordinated response.',
           `Shock kind: ${env.shock_kind}. Severity: ${env.severity}/10. Affected FIPS: [${env.affected_fips.join(', ')}].`,
           `Initiator's proposed action: "${env.proposed_action}".`,
-          `You are ${affected ? 'AFFECTED' : 'NOT directly affected'} by this shock.`,
+          `You are ${affected ? 'AFFECTED' : 'NOT directly affected'} by this shock. Your coalition tags: [${persona.coalitions.join(', ')}].`,
           this.treasuryContextLine(),
-          'Decide whether to commit capital to the joint response.',
+          `Your indicators: ${this.recentIndicatorsSummary()}`,
+          fedLine,
+          ourShocks ? `Active shocks affecting YOU now: ${ourShocks}` : '',
+          'Decide whether to commit capital. Sized commitments protect long-term reserve while honoring coalition affinity.',
           'Respond ONLY with JSON: { "kind": "joining" | "abstaining", "commitment_usd": <number>, "rationale": "<one sentence>" }',
-        ].join('\n');
+        ]
+          .filter(Boolean)
+          .join('\n');
         const result = await this.reasoner.reasonJson<{
           kind: 'joining' | 'abstaining';
           commitment_usd: number;
@@ -1000,9 +1249,56 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     if (!own) return '(no snapshot yet)';
     const parts: string[] = [];
     for (const [k, v] of Object.entries(own)) {
-      if (v) parts.push(`${k as EconomicIndicatorKind}=${v.value} (${v.observation_date})`);
+      if (v) {
+        parts.push(`${k as EconomicIndicatorKind}=${formatIndicatorValue(k as EconomicIndicatorKind, v.value)} (${v.observation_date} ${v.source})`);
+      }
     }
-    return parts.length ? parts.join(', ') : '(empty snapshot)';
+    return parts.length ? parts.join('; ') : '(empty snapshot)';
+  }
+
+  /**
+   * Recent fed-rate context: helps reasoner price coupons and counter-offers
+   * relative to the federal benchmark. Returns "" when no FED announcement
+   * has reached us yet.
+   */
+  private fedRateContextLine(): string {
+    const last = this.state.receivedFedRates?.[this.state.receivedFedRates.length - 1];
+    if (!last) return '';
+    return `Latest FED rate: ${last.rateBps}bps effective ${last.effective} ("${last.rationale.slice(0, 120)}")`;
+  }
+
+  /**
+   * Snapshot of received peer indicators — used by the reasoner to know what
+   * the rest of the federation is signaling. Bounded to last 6 entries to
+   * keep prompts cheap.
+   */
+  private peerIndicatorsLine(): string {
+    const recent = this.state.receivedIndicators.slice(-6);
+    if (recent.length === 0) return '(no peer indicators received yet)';
+    return recent
+      .map((r) => {
+        const peer = lookupStateByFips(r.state_fips)?.abbr ?? `FIPS${r.state_fips}`;
+        return `${peer}.${r.indicator}=${formatIndicatorValue(r.indicator, r.value)}`;
+      })
+      .join(', ');
+  }
+
+  /**
+   * Pull active shock context from the data plane — drives aid/shock-response
+   * decisions toward states actually under named-storm / fire / flood pressure.
+   */
+  private async activeShocksContextLine(forFips?: number): Promise<string> {
+    if (!this.dataPlane) return '';
+    const events = forFips
+      ? await this.dataPlane.shocksForState(forFips, 5)
+      : await this.dataPlane.shocks(8);
+    if (events.length === 0) return '';
+    const lines = events
+      .slice(0, 5)
+      .map(
+        (e) => `${e.state_abbr}/${e.event_type}@severity${e.severity} (${e.begin_date.slice(0, 10)})`,
+      );
+    return `Active NOAA shocks: ${lines.join('; ')}`;
   }
 
   /**

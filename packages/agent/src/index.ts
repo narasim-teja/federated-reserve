@@ -141,8 +141,9 @@ console.log(
   `[${cfg.state.abbr}]   Registered "${cfg.mcp.serviceName}" with router at ${cfg.mcp.routerUrl}`,
 );
 
-// 6. Start A2A server (now reasoner-aware + Phase 3 swap-executor-aware).
-const a2a = startA2aServer(cfg, state, reasoner, systemPrompt, swapExecutor);
+// 6. Start A2A server (now reasoner-aware + Phase 3 swap-executor-aware
+//    + Phase 4+ data-plane-aware so handlers can read NOAA shocks).
+const a2a = startA2aServer(cfg, state, reasoner, systemPrompt, swapExecutor, dataPlane);
 
 // 7. Discovery loop.
 discovery.start(10_000);

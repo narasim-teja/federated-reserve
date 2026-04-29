@@ -47,6 +47,17 @@ export const economicIndicatorKindSchema = z.enum([
   'reserve_ratio',
   'personal_income',
   'cpi',
+  // BLS LAUS state-level
+  'employment_count',
+  'labor_force',
+  // BEA Regional
+  'gdp_quarterly',
+  'gdp_annual',
+  'personal_income_total',
+  // Census ACS 5-year baselines
+  'population',
+  'median_household_income',
+  'poverty_rate',
 ]);
 export type EconomicIndicatorKind = z.infer<typeof economicIndicatorKindSchema>;
 

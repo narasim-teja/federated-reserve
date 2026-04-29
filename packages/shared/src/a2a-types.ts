@@ -158,7 +158,12 @@ export const COALITION_TAGS = [
 export const coalitionTagSchema = z.enum(COALITION_TAGS);
 export type CoalitionTag = z.infer<typeof coalitionTagSchema>;
 
-// participate-in-coalition: initiator invites peers to join a coalition by tag
+// participate-in-coalition: initiator invites peers to join a coalition by tag.
+// Phase 4 update: lifecycle is now multi-turn. The first message is an
+// `invite`; the responder may emit `counter_terms` (asks for revised
+// commitment/duration) → state stays `input-required`; initiator (or
+// driver) replies with `revised_invite`; responder emits final
+// `joined`|`declined`.
 export const coalitionInviteSchema = z.object({
   skill: z.literal('participate-in-coalition'),
   initiator_fips: fipsSchema,
@@ -169,15 +174,49 @@ export const coalitionInviteSchema = z.object({
     .max(200)
     .describe('Free-text coalition purpose, e.g. "shared-aid-pool-Q3-2026"'),
   proposed_contribution_usd: z.number().nonnegative(),
+  /** Optional duration in days (e.g. for fixed-term aid pools). */
+  duration_days: z.number().int().positive().max(3650).optional(),
 });
 export type CoalitionInvite = z.infer<typeof coalitionInviteSchema>;
 
+/**
+ * Phase 4 multi-turn — responder asks for revised terms before committing.
+ * The initiator (or the test driver) follows up with a `revised_invite`
+ * carrying updated `proposed_contribution_usd`/`duration_days`; the same
+ * task transitions Working → InputRequired → Completed (joined|declined).
+ */
+export const coalitionCounterTermsSchema = z.object({
+  skill: z.literal('participate-in-coalition'),
+  kind: z.literal('counter_terms'),
+  responder_fips: fipsSchema,
+  /** Counter contribution_usd this peer would commit. */
+  preferred_contribution_usd: z.number().nonnegative(),
+  /** Counter duration. Optional — falls back to the invite's duration. */
+  preferred_duration_days: z.number().int().positive().max(3650).optional(),
+  rationale: z.string().min(1).max(500),
+});
+export type CoalitionCounterTerms = z.infer<typeof coalitionCounterTermsSchema>;
+
+export const coalitionRevisedInviteSchema = z.object({
+  skill: z.literal('participate-in-coalition'),
+  kind: z.literal('revised_invite'),
+  initiator_fips: fipsSchema,
+  coalition_tag: coalitionTagSchema,
+  topic: z.string().min(1).max(200),
+  proposed_contribution_usd: z.number().nonnegative(),
+  duration_days: z.number().int().positive().max(3650).optional(),
+});
+export type CoalitionRevisedInvite = z.infer<typeof coalitionRevisedInviteSchema>;
+
 export const coalitionResponseSchema = z.object({
   skill: z.literal('participate-in-coalition'),
-  kind: z.enum(['joined', 'declined']),
+  kind: z.enum(['joined', 'declined', 'counter_terms']),
   responder_fips: fipsSchema,
   contribution_usd: z.number().nonnegative(),
   rationale: z.string().min(1).max(500),
+  /** Phase 4 multi-turn: only set when kind=counter_terms. */
+  preferred_contribution_usd: z.number().nonnegative().optional(),
+  preferred_duration_days: z.number().int().positive().max(3650).optional(),
 });
 export type CoalitionResponse = z.infer<typeof coalitionResponseSchema>;
 
@@ -266,9 +305,14 @@ export type ShockContribution = z.infer<typeof shockContributionSchema>;
 /**
  * Top-level discriminated union for the 4 new skills' first messages.
  * Routed by `skill`; the executor dispatches to the matching handler.
+ *
+ * Coalition is multi-turn: the discriminator falls through to the
+ * coalition handler which then re-discriminates on `kind` (revised_invite
+ * vs the initial invite has no `kind`). bond/aid/shock stay single-shot.
  */
-export const skillEnvelopeSchema = z.discriminatedUnion('skill', [
+export const skillEnvelopeSchema = z.union([
   coalitionInviteSchema,
+  coalitionRevisedInviteSchema,
   bondBidSchema,
   aidRequestSchema,
   shockSignalSchema,

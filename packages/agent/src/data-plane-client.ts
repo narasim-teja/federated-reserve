@@ -12,12 +12,48 @@
 
 import {
   type DataPlaneHealth,
+  type ShockEvent,
   type StateSnapshot,
+  shockEventSchema,
   stateSnapshotSchema,
 } from '@federated-reserve/shared';
 
 export class DataPlaneClient {
   constructor(private readonly baseUrl: string) {}
+
+  /** Top-N severity-sorted active shock events from NOAA. */
+  async shocks(limit = 20, signal?: AbortSignal): Promise<ShockEvent[]> {
+    try {
+      const res = await fetch(`${this.baseUrl}/shocks?limit=${limit}`, { signal });
+      if (!res.ok) return [];
+      const json = (await res.json()) as { events?: unknown };
+      const events: ShockEvent[] = [];
+      for (const raw of (json.events as unknown[]) ?? []) {
+        const parsed = shockEventSchema.safeParse(raw);
+        if (parsed.success) events.push(parsed.data);
+      }
+      return events;
+    } catch {
+      return [];
+    }
+  }
+
+  /** Active shock events affecting a specific state. */
+  async shocksForState(fips: number, limit = 10, signal?: AbortSignal): Promise<ShockEvent[]> {
+    try {
+      const res = await fetch(`${this.baseUrl}/shocks/state/${fips}?limit=${limit}`, { signal });
+      if (!res.ok) return [];
+      const json = (await res.json()) as { events?: unknown };
+      const events: ShockEvent[] = [];
+      for (const raw of (json.events as unknown[]) ?? []) {
+        const parsed = shockEventSchema.safeParse(raw);
+        if (parsed.success) events.push(parsed.data);
+      }
+      return events;
+    } catch {
+      return [];
+    }
+  }
 
   /** Returns the cached snapshot for a state, or `null` if not loaded yet / unreachable. */
   async snapshot(fips: number, signal?: AbortSignal): Promise<StateSnapshot | null> {
