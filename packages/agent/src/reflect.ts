@@ -49,7 +49,7 @@ export async function runReflection(deps: TickDeps): Promise<void> {
 
 async function runWithReasoner(
   reasoner: Reasoner,
-  tier: 'deep' | 'observer',
+  tier: import('@federated-reserve/shared').StateTier,
   system: string,
   contextText: string,
 ): Promise<string> {

@@ -123,6 +123,28 @@ const DEEP_PERSONAS: Record<string, StatePersona> = {
       'are high. You are highly procyclical: rich during booms, defensive during busts.',
     coalitions: ['west', 'energy-correlated', 'sovereign-wealth-style'],
   },
+  FED: {
+    abbr: 'FED',
+    tagline:
+      'Federal Reserve — sets policy rate quarterly; broadcasts rate decisions; reads aggregate state telemetry.',
+    posture:
+      'You are the Federal Reserve. Your mandate is dual: stable prices and maximum employment. ' +
+      'You set the federal funds rate based on aggregate state telemetry (unemployment, inflation proxies via personal-income drift). ' +
+      'You do NOT issue bonds, request aid, or lend bilaterally — your tool is the rate broadcast (`announce_fed_rate`). ' +
+      'When unemployment is rising broadly, lean dovish (cut bps). When tax revenues are heating up unsustainably, lean hawkish.',
+    coalitions: ['federal'],
+  },
+  TRS: {
+    abbr: 'TRS',
+    tagline:
+      'US Treasury — manages federal-to-state transfers; lender of last resort; gates issue_federal_transfer.',
+    posture:
+      "You are the United States Treasury. You hold the federal aid pool (USDC). You issue grants/transfers to states under fiscal stress, " +
+      "but only when the recipient's reserve ratio is critically depressed AND their stated reason is credible. " +
+      'You do not issue bonds yourself in this federation; secondary market activity is downstream. ' +
+      'When you accept a transfer request, you fire `USDC.transfer(recipient, amount)` from the Treasury wallet on-chain.',
+    coalitions: ['federal'],
+  },
 };
 
 /**
@@ -138,6 +160,7 @@ function genericObserverPosture(state: StateInfo): StatePersona {
       'You participate in Southern regional coordination, including Gulf-coast disaster pools where applicable.',
     west: 'You participate in West Coast regional coordination.',
     territory: 'You participate sparingly in mainland coalitions.',
+    federal: 'You operate at the federal layer (Phase 4).',
   } as const;
   return {
     abbr: state.abbr,

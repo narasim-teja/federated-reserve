@@ -72,6 +72,14 @@ export interface AgentConfig {
     /** This agent's private key (e.g. WALLET_MA_PRIVATE_KEY). */
     walletPrivateKey: `0x${string}` | undefined;
   };
+  /**
+   * Phase 4 multi-bidder bond auction tuning. The issuer waits up to
+   * `windowMs` (or until `maxBidsForEval` bids arrive) before evaluating.
+   */
+  bondAuction: {
+    windowMs: number;
+    maxBidsForEval: number;
+  };
 }
 
 export function loadConfig(): AgentConfig {
@@ -106,6 +114,10 @@ export function loadConfig(): AgentConfig {
     tickIntervalMs: readNumber('TICK_INTERVAL_MS', 30_000),
     reflectEveryNTicks: readNumber('REFLECT_EVERY_N_TICKS', 4),
     reasoningEnabled,
+    bondAuction: {
+      windowMs: readNumber('BOND_AUCTION_WINDOW_MS', 8_000),
+      maxBidsForEval: readNumber('BOND_AUCTION_MAX_BIDS', 8),
+    },
     settlement: ((): AgentConfig['settlement'] => {
       const pkEnv = process.env[`WALLET_${state.abbr}_PRIVATE_KEY`];
       const apiKey = process.env.UNISWAP_API_KEY ?? '';

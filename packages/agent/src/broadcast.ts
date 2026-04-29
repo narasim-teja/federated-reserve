@@ -16,6 +16,7 @@
  */
 
 import {
+  type AnnounceFedRateInput,
   type ShareEconomicIndicatorInput,
   TREASURER_SERVICE_NAME,
 } from '@federated-reserve/shared';
@@ -69,6 +70,53 @@ export async function broadcastIndicator(
   const ok = results.filter((r) => r.ok).length;
   console.log(
     `[${cfg.state.abbr}] broadcast ${input.indicator}=${input.value} → ${ok}/${peers.length} peers`,
+  );
+  return results;
+}
+
+/**
+ * Phase 4 — Federal Reserve rate broadcast. Called by the FED agent's tick
+ * loop. Same fan-out semantics as `broadcastIndicator` but targets a
+ * different MCP tool. Receivers store the announcement in
+ * `state.receivedFedRates` for downstream reasoning.
+ */
+export async function broadcastFedRate(
+  cfg: AgentConfig,
+  axl: AxlClient,
+  discovery: MeshDiscovery,
+  input: AnnounceFedRateInput,
+): Promise<BroadcastResult[]> {
+  const peers = discovery.knownPeers();
+  if (peers.length === 0) {
+    console.log(`[${cfg.state.abbr}] no peers to broadcast fed rate to (yet)`);
+    return [];
+  }
+
+  const id = broadcastSeq++;
+  const body = {
+    jsonrpc: '2.0' as const,
+    id,
+    method: 'tools/call' as const,
+    params: {
+      name: MCP_TOOLS.ANNOUNCE_FED_RATE,
+      arguments: input,
+    },
+  };
+
+  const results = await Promise.all(
+    peers.map(async (peer): Promise<BroadcastResult> => {
+      try {
+        await axl.callRemoteMcp(peer, TREASURER_SERVICE_NAME, body);
+        return { peer, ok: true };
+      } catch (err) {
+        return { peer, ok: false, error: String(err) };
+      }
+    }),
+  );
+
+  const ok = results.filter((r) => r.ok).length;
+  console.log(
+    `[${cfg.state.abbr}] broadcast fed_rate=${input.rate_bps}bps → ${ok}/${peers.length} peers`,
   );
   return results;
 }

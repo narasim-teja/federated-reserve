@@ -94,12 +94,57 @@ export const shareTopologyResultSchema = z.object({
 });
 export type ShareTopologyResult = z.infer<typeof shareTopologyResultSchema>;
 
+// ---------- announce_fed_rate (Phase 4 — Federal Reserve broadcast) ----------
+
+export const announceFedRateInputSchema = z.object({
+  rate_bps: z
+    .number()
+    .int()
+    .min(0)
+    .max(5000)
+    .describe('New federal funds rate in basis points (e.g. 525 = 5.25%).'),
+  effective: z.string().describe('ISO-8601 effective timestamp.'),
+  rationale: z.string().min(1).max(500),
+});
+export type AnnounceFedRateInput = z.infer<typeof announceFedRateInputSchema>;
+
+export const announceFedRateResultSchema = z.object({
+  acknowledged: z.literal(true),
+  receiver_fips: z.number().int(),
+  received_at: z.string(),
+});
+export type AnnounceFedRateResult = z.infer<typeof announceFedRateResultSchema>;
+
+// ---------- issue_federal_transfer (Phase 4 — Treasury action tool) ----------
+
+export const issueFederalTransferInputSchema = z.object({
+  recipient_fips: fipsSchema.describe('Recipient state FIPS code.'),
+  amount_usd: z.number().positive().describe('Transfer amount in whole USD.'),
+  reason: z.string().min(1).max(500),
+});
+export type IssueFederalTransferInput = z.infer<typeof issueFederalTransferInputSchema>;
+
+export const issueFederalTransferResultSchema = z.object({
+  approved: z.boolean(),
+  recipient_fips: z.number().int(),
+  amount_usd: z.number(),
+  /** Hex tx hash of the USDC.transfer if approved, else empty. */
+  tx_hash: z.string(),
+  /** Block number; empty when not approved. */
+  block_number: z.string(),
+  /** Treasury's reasoner-driven justification. */
+  rationale: z.string(),
+});
+export type IssueFederalTransferResult = z.infer<typeof issueFederalTransferResultSchema>;
+
 // ---------- MCP tool name registry ------------------------------------------
 
 export const MCP_TOOLS = {
   QUERY_TREASURY: 'query_treasury',
   SHARE_ECONOMIC_INDICATOR: 'share_economic_indicator',
   SHARE_TOPOLOGY: 'share_topology',
+  ANNOUNCE_FED_RATE: 'announce_fed_rate',
+  ISSUE_FEDERAL_TRANSFER: 'issue_federal_transfer',
 } as const;
 
 export type McpToolName = (typeof MCP_TOOLS)[keyof typeof MCP_TOOLS];

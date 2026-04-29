@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# Phase 2 local mesh: 5 AXL nodes + 5 MCP routers + 5 agent processes (MA, CA, TX, NY, FL).
-# Also boots the data plane sidecar on :3002 (single shared service for FRED ingestion).
+# Phase 4 local mesh: up to 10 AXL nodes + routers + agent processes
+# (MA, CA, TX, NY, FL, IL, WA, AK + FED + TRS) + data plane sidecar.
 #
-# Topology:
-#   MA (FIPS 25): AXL :9002 listen :9001  | router :9003  | mcp :7100  | a2a :9004
-#   CA (FIPS  6): AXL :9012 peers→:9001   | router :9013  | mcp :7110  | a2a :9014
-#   TX (FIPS 48): AXL :9022 peers→:9001   | router :9023  | mcp :7120  | a2a :9024
-#   NY (FIPS 36): AXL :9032 peers→:9001   | router :9033  | mcp :7130  | a2a :9034
-#   FL (FIPS 12): AXL :9042 peers→:9001   | router :9043  | mcp :7140  | a2a :9044
+# Topology (full mesh — every node Listens, leaves Peer with bootstrap MA):
+#   MA  (FIPS 25): AXL :9002 listen :9001 | router :9003 | mcp :7100 | a2a :9004
+#   CA  (FIPS  6): AXL :9012 listen :9011 | router :9013 | mcp :7110 | a2a :9014
+#   TX  (FIPS 48): AXL :9022 listen :9021 | router :9023 | mcp :7120 | a2a :9024
+#   NY  (FIPS 36): AXL :9032 listen :9031 | router :9033 | mcp :7130 | a2a :9034
+#   FL  (FIPS 12): AXL :9042 listen :9041 | router :9043 | mcp :7140 | a2a :9044
+#   IL  (FIPS 17): AXL :9052 listen :9051 | router :9053 | mcp :7150 | a2a :9054
+#   WA  (FIPS 53): AXL :9062 listen :9061 | router :9063 | mcp :7160 | a2a :9064
+#   AK  (FIPS  2): AXL :9072 listen :9071 | router :9073 | mcp :7170 | a2a :9074
+#   FED (FIPS100): AXL :9082 listen :9081 | router :9083 | mcp :7180 | a2a :9084
+#   TRS (FIPS101): AXL :9092 listen :9091 | router :9093 | mcp :7190 | a2a :9094
 #   data-plane (single shared sidecar):     :3002
 #
 # All AXL nodes share `tcp_port: 7000` per the Phase 0 finding (gVisor TCP is
@@ -20,9 +25,11 @@
 #   ./scripts/run-local-mesh.sh status    # quick health probe of each agent
 #
 # Env knobs:
-#   MESH_AGENTS=3                # legacy 3-agent mesh (skip NY/FL)
-#   SKIP_DATA_PLANE=1            # don't boot the data plane sidecar
-#   TICK_INTERVAL_MS=30000       # passed through to each agent process
+#   MESH_AGENTS=3 | 5 | 10        # 3 (Phase 1), 5 (Phase 2-3), 10 full (Phase 4)
+#   SKIP_DATA_PLANE=1             # don't boot the data plane sidecar
+#   TICK_INTERVAL_MS=30000        # passed through to each agent process
+#   FED_RATE_BROADCAST_EVERY_N=4  # how often FED announces a new rate
+#   BOND_AUCTION_WINDOW_MS=8000   # multi-bidder auction window per bond_id
 
 set -euo pipefail
 
@@ -51,26 +58,34 @@ cmd="${1:-run}"
 # ---------- agents -----------------------------------------------------------
 # name, fips, axl_api, axl_listen, router, mcp, a2a, key_pem, config
 ALL_AGENTS=(
-  "MA 25 9002 9001 9003 7100 9004 node-ma.pem node-ma.json"
-  "CA  6 9012 9011 9013 7110 9014 node-ca.pem node-ca.json"
-  "TX 48 9022 9021 9023 7120 9024 node-tx.pem node-tx.json"
-  "NY 36 9032 9031 9033 7130 9034 node-ny.pem node-ny.json"
-  "FL 12 9042 9041 9043 7140 9044 node-fl.pem node-fl.json"
+  "MA   25 9002 9001 9003 7100 9004 node-ma.pem  node-ma.json"
+  "CA    6 9012 9011 9013 7110 9014 node-ca.pem  node-ca.json"
+  "TX   48 9022 9021 9023 7120 9024 node-tx.pem  node-tx.json"
+  "NY   36 9032 9031 9033 7130 9034 node-ny.pem  node-ny.json"
+  "FL   12 9042 9041 9043 7140 9044 node-fl.pem  node-fl.json"
+  "IL   17 9052 9051 9053 7150 9054 node-il.pem  node-il.json"
+  "WA   53 9062 9061 9063 7160 9064 node-wa.pem  node-wa.json"
+  "AK    2 9072 9071 9073 7170 9074 node-ak.pem  node-ak.json"
+  "FED 100 9082 9081 9083 7180 9084 node-fed.pem node-fed.json"
+  "TRS 101 9092 9091 9093 7190 9094 node-trs.pem node-trs.json"
 )
 
-# Default to 5-agent mesh; opt out via env for the legacy Phase 1 layout.
-case "${MESH_AGENTS:-5}" in
-  3) AGENTS=("${ALL_AGENTS[@]:0:3}") ;;
-  5) AGENTS=("${ALL_AGENTS[@]}") ;;
-  *) echo "ERROR: MESH_AGENTS must be 3 or 5"; exit 1 ;;
+# Default to full Phase 4 federation (10 agents).
+case "${MESH_AGENTS:-10}" in
+  3)  AGENTS=("${ALL_AGENTS[@]:0:3}") ;;
+  5)  AGENTS=("${ALL_AGENTS[@]:0:5}") ;;
+  8)  AGENTS=("${ALL_AGENTS[@]:0:8}") ;;
+  10) AGENTS=("${ALL_AGENTS[@]}") ;;
+  *)  echo "ERROR: MESH_AGENTS must be 3, 5, 8, or 10"; exit 1 ;;
 esac
 
 ALL_PORTS=(
   9001 9002 9011 9012 9021 9022 9031 9032 9041 9042
+  9051 9052 9061 9062 9071 9072 9081 9082 9091 9092
   7000
-  9003 9013 9023 9033 9043
-  7100 7110 7120 7130 7140
-  9004 9014 9024 9034 9044
+  9003 9013 9023 9033 9043 9053 9063 9073 9083 9093
+  7100 7110 7120 7130 7140 7150 7160 7170 7180 7190
+  9004 9014 9024 9034 9044 9054 9064 9074 9084 9094
   "$DATA_PLANE_PORT"
 )
 
@@ -207,6 +222,9 @@ for entry in "${AGENTS[@]}"; do
     MEMORY_ROOT="$ROOT/memory" \
     TICK_INTERVAL_MS="${TICK_INTERVAL_MS:-30000}" \
     REFLECT_EVERY_N_TICKS="${REFLECT_EVERY_N_TICKS:-4}" \
+    BOND_AUCTION_WINDOW_MS="${BOND_AUCTION_WINDOW_MS:-8000}" \
+    BOND_AUCTION_MAX_BIDS="${BOND_AUCTION_MAX_BIDS:-8}" \
+    FED_RATE_BROADCAST_EVERY_N="${FED_RATE_BROADCAST_EVERY_N:-4}" \
     bun run src/index.ts
   ) > "$LOG_DIR/agent-$name.log" 2>&1 &
   echo $! >> "$PID_FILE"

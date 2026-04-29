@@ -13,9 +13,15 @@
 
 import {
   MCP_TOOLS,
+  type AnnounceFedRateResult,
+  type IssueFederalTransferResult,
   type QueryTreasuryResult,
   type ShareEconomicIndicatorResult,
   type ShareTopologyResult,
+  announceFedRateInputSchema,
+  getUsdc,
+  issueFederalTransferInputSchema,
+  loadDeployments,
   queryTreasuryInputSchema,
   shareEconomicIndicatorInputSchema,
   shareTopologyInputSchema,
@@ -26,13 +32,15 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import type { AxlClient } from '../axl-client.ts';
 import type { AgentConfig } from '../config.ts';
 import type { MeshDiscovery } from '../discovery.ts';
-import { type AgentState, pushReceivedIndicator } from '../state.ts';
+import type { SwapExecutor } from '../execute.ts';
+import { type AgentState, pushReceivedFedRate, pushReceivedIndicator } from '../state.ts';
 
 interface ServerDeps {
   cfg: AgentConfig;
   state: AgentState;
   axl: AxlClient;
   discovery: MeshDiscovery;
+  swapExecutor?: SwapExecutor;
 }
 
 function registerTools(mcp: McpServer, deps: ServerDeps): void {
@@ -92,6 +100,121 @@ function registerTools(mcp: McpServer, deps: ServerDeps): void {
       return {
         content: [{ type: 'text', text: JSON.stringify(result) }],
       };
+    },
+  );
+
+  // ---- announce_fed_rate (Phase 4) -----------------------------------------
+  // Every agent listens for this; Fed agent originates the broadcast in its
+  // tick loop. The receiver records it in state.receivedFedRates so the
+  // reasoner can reference policy stance in its decisions.
+  mcp.registerTool(
+    MCP_TOOLS.ANNOUNCE_FED_RATE,
+    {
+      title: 'Receive a Federal Reserve rate announcement',
+      description: 'Federal Reserve broadcasts a new policy rate to the mesh.',
+      inputSchema: announceFedRateInputSchema.shape,
+    },
+    async (input) => {
+      const receivedAt = new Date().toISOString();
+      pushReceivedFedRate(state, {
+        rateBps: input.rate_bps,
+        effective: input.effective,
+        rationale: input.rationale,
+        receivedAt,
+      });
+      console.log(
+        `[${cfg.state.abbr}] received FED rate: ${input.rate_bps}bps effective ${input.effective} — ${input.rationale}`,
+      );
+      const result: AnnounceFedRateResult = {
+        acknowledged: true,
+        receiver_fips: cfg.state.fips,
+        received_at: receivedAt,
+      };
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    },
+  );
+
+  // ---- issue_federal_transfer (Phase 4 — Treasury action tool) ------------
+  // Only the Treasury agent (FIPS 101) actually fires the on-chain transfer;
+  // every other agent registers the tool but rejects with a "not authorized"
+  // result. This keeps the tool universally callable for discoverability
+  // while honoring the Treasury-only authority.
+  mcp.registerTool(
+    MCP_TOOLS.ISSUE_FEDERAL_TRANSFER,
+    {
+      title: 'Issue a federal-to-state transfer (Treasury only)',
+      description:
+        'Request Treasury to fire USDC.transfer(recipient, amount). Treasury reasoner-gates approval.',
+      inputSchema: issueFederalTransferInputSchema.shape,
+    },
+    async (input) => {
+      const recipient = lookupStateByFips(input.recipient_fips);
+      if (cfg.state.abbr !== 'TRS') {
+        const result: IssueFederalTransferResult = {
+          approved: false,
+          recipient_fips: input.recipient_fips,
+          amount_usd: input.amount_usd,
+          tx_hash: '',
+          block_number: '',
+          rationale: `${cfg.state.abbr} is not the Treasury — only TRS can issue federal transfers.`,
+        };
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+      }
+      if (!recipient) {
+        const result: IssueFederalTransferResult = {
+          approved: false,
+          recipient_fips: input.recipient_fips,
+          amount_usd: input.amount_usd,
+          tx_hash: '',
+          block_number: '',
+          rationale: `Unknown recipient FIPS ${input.recipient_fips}.`,
+        };
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+      }
+      // Phase 4 simple gating: approve if amount < 10M and recipient is a
+      // real state. Phase 5+ adds a reasoner check on recipient stress level.
+      const approved = input.amount_usd > 0 && input.amount_usd < 10_000_000;
+      let txHash = '';
+      let blockNumber = '';
+      let rationale = '';
+      if (!approved) {
+        rationale = `Treasury declines transfer of $${input.amount_usd} (over $10M cap or invalid amount).`;
+      } else if (!deps.swapExecutor || !cfg.settlement.enabled) {
+        rationale = `Treasury approval logic OK but settlement wallet not wired (settlement.enabled=${cfg.settlement.enabled}).`;
+      } else {
+        const recipAddr = process.env[`WALLET_${recipient.abbr}_ADDRESS`];
+        if (!recipAddr) {
+          rationale = `Treasury declines: no WALLET_${recipient.abbr}_ADDRESS in env.`;
+        } else {
+          try {
+            const deployments = loadDeployments('unichain-sepolia');
+            const usdc = getUsdc(deployments);
+            const amountBase = BigInt(Math.floor(input.amount_usd)) * 1_000_000n;
+            const r = await deps.swapExecutor.payIssuer(
+              usdc.address,
+              recipAddr as `0x${string}`,
+              amountBase,
+            );
+            txHash = r.txHash;
+            blockNumber = r.blockNumber.toString();
+            rationale = `Treasury approves and transfers $${input.amount_usd} to ${recipient.abbr}: ${input.reason}`;
+            console.log(
+              `[TRS] federal transfer ${input.amount_usd} → ${recipient.abbr} tx=${r.txHash} status=${r.status}`,
+            );
+          } catch (err) {
+            rationale = `Treasury approval logic OK but transfer threw: ${(err as Error).message}`;
+          }
+        }
+      }
+      const result: IssueFederalTransferResult = {
+        approved: approved && !!txHash,
+        recipient_fips: input.recipient_fips,
+        amount_usd: input.amount_usd,
+        tx_hash: txHash,
+        block_number: blockNumber,
+        rationale,
+      };
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     },
   );
 

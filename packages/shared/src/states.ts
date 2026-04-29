@@ -10,9 +10,16 @@
  * coalitions. Phase 2 wires this in; Phase 1 just carries the field.
  */
 
-export type StateTier = 'deep' | 'observer';
+/**
+ * Agent tier:
+ *   - 'deep'     — hand-tuned persona, full skill set, initiates strategies (Phase 2-3 8 states)
+ *   - 'observer' — region-fallback persona, responds to proposals, limited init scope (Phase 2 42 states)
+ *   - 'federal'  — synthetic non-state agent (Federal Reserve, Treasury). Phase 4. No FRED snapshots.
+ */
+export type StateTier = 'deep' | 'observer' | 'federal';
 
-export type CensusRegion = 'northeast' | 'midwest' | 'south' | 'west' | 'territory';
+/** Phase 4 introduces 'federal' for the Fed + Treasury synthetic agents. */
+export type CensusRegion = 'northeast' | 'midwest' | 'south' | 'west' | 'territory' | 'federal';
 
 export interface StateInfo {
   fips: number;
@@ -79,10 +86,24 @@ const RAW: Array<Omit<StateInfo, 'tier'>> = [
   { fips: 72, abbr: 'PR', name: 'Puerto Rico', region: 'territory' },
 ];
 
-export const STATES: readonly StateInfo[] = RAW.map((s) => ({
-  ...s,
-  tier: DEEP_ABBRS.has(s.abbr) ? 'deep' : 'observer',
-}));
+/**
+ * Phase 4 — synthetic federal-tier agents. They share the same agent
+ * runtime as states but skip data-plane snapshots (no per-state FRED
+ * series for FIPS 100/101) and expose their own MCP tools (announce
+ * fed rate, federal transfer).
+ */
+const FEDERAL_AGENTS: ReadonlyArray<StateInfo> = [
+  { fips: 100, abbr: 'FED', name: 'Federal Reserve', region: 'federal', tier: 'federal' },
+  { fips: 101, abbr: 'TRS', name: 'US Treasury', region: 'federal', tier: 'federal' },
+];
+
+export const STATES: readonly StateInfo[] = [
+  ...RAW.map<StateInfo>((s) => ({
+    ...s,
+    tier: DEEP_ABBRS.has(s.abbr) ? 'deep' : 'observer',
+  })),
+  ...FEDERAL_AGENTS,
+];
 
 export const STATES_BY_FIPS: Readonly<Record<number, StateInfo>> = Object.freeze(
   Object.fromEntries(STATES.map((s) => [s.fips, s])),

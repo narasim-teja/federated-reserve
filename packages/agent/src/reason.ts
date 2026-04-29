@@ -144,7 +144,11 @@ export class Reasoner {
   }
 
   presetForTier(tier: StateTier): string {
-    return tier === 'deep' ? this.presets.deep : this.presets.observer;
+    // 'federal' tier maps to the deep preset — Fed/Treasury reasoning
+    // benefits from Opus-tier capability for rate-setting + transfer
+    // gating, even though they're not state agents.
+    if (tier === 'observer') return this.presets.observer;
+    return this.presets.deep;
   }
 
   async reason(req: ReasoningRequest): Promise<ReasoningResponse> {

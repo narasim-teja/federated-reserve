@@ -13,7 +13,7 @@
 
 import { type StateSnapshot, pickBroadcastIndicator } from '@federated-reserve/shared';
 import type { AxlClient } from './axl-client.ts';
-import { broadcastIndicator } from './broadcast.ts';
+import { broadcastFedRate, broadcastIndicator } from './broadcast.ts';
 import type { AgentConfig } from './config.ts';
 import type { DataPlaneClient } from './data-plane-client.ts';
 import type { MeshDiscovery } from './discovery.ts';
@@ -39,20 +39,34 @@ export function startTickLoop(deps: TickDeps): { stop: () => void } {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
+  const isFederal = cfg.state.tier === 'federal';
+  const isFed = cfg.state.abbr === 'FED';
+  const fedRateBroadcastEveryN = Number(process.env.FED_RATE_BROADCAST_EVERY_N ?? '4');
+
   const tick = async () => {
     if (stopped) return;
     state.tickCount += 1;
     const tickNo = state.tickCount;
 
     try {
-      const snapshot = await dataPlane.snapshot(cfg.state.fips);
-      if (!snapshot) {
-        console.log(
-          `[${cfg.state.abbr}] tick ${tickNo}: no snapshot from data plane yet — skipping broadcast`,
-        );
+      if (isFederal) {
+        // Federal-tier agents (FED, TRS) don't have FRED snapshots — they
+        // never broadcast `share_economic_indicator`. FED instead emits a
+        // policy-rate broadcast every Nth tick; TRS only responds to
+        // `issue_federal_transfer` MCP requests, no broadcast cadence.
+        if (isFed && tickNo % fedRateBroadcastEveryN === 0) {
+          await broadcastFedRateTick(deps, tickNo);
+        }
       } else {
-        state.ownSnapshot = snapshot;
-        await broadcastFromSnapshot(deps, snapshot, tickNo);
+        const snapshot = await dataPlane.snapshot(cfg.state.fips);
+        if (!snapshot) {
+          console.log(
+            `[${cfg.state.abbr}] tick ${tickNo}: no snapshot from data plane yet — skipping broadcast`,
+          );
+        } else {
+          state.ownSnapshot = snapshot;
+          await broadcastFromSnapshot(deps, snapshot, tickNo);
+        }
       }
 
       // Reflection cadence — log-based summary using OpenRouter (when enabled).
@@ -80,6 +94,64 @@ export function startTickLoop(deps: TickDeps): { stop: () => void } {
       if (timer) clearTimeout(timer);
     },
   };
+}
+
+/**
+ * Phase 4 — Fed agent's tick-loop fan-out. Picks a rate from a small
+ * deterministic schedule (so demos look intentional), or, if the
+ * reasoner is wired in, asks the LLM for a rate decision based on
+ * received state telemetry.
+ */
+async function broadcastFedRateTick(deps: TickDeps, tickNo: number): Promise<void> {
+  const { cfg, axl, discovery, memory, state, reasoner } = deps;
+
+  // Minimal default cycle: walk a 4-step rate path so the demo shows
+  // movement even without the LLM. Override the per-tick rate via env.
+  const fixedSchedule = [525, 500, 475, 450];
+  const idx = Math.floor(tickNo / 4) % fixedSchedule.length;
+  let rateBps = fixedSchedule[idx] ?? 525;
+  let rationale = `Quarterly cadence (deterministic): tick ${tickNo} → ${rateBps}bps.`;
+
+  if (reasoner && cfg.reasoningEnabled) {
+    try {
+      const recentIndicators = state.receivedIndicators.slice(-12).map((r) => ({
+        from_fips: r.state_fips,
+        kind: r.indicator,
+        value: r.value,
+        date: r.timestamp,
+      }));
+      const prompt = [
+        'Skill: announce_fed_rate. You are the Federal Reserve. Set the federal funds rate.',
+        `Recent indicators received from states: ${JSON.stringify(recentIndicators)}`,
+        `Last announced rate: ${state.receivedFedRates?.[state.receivedFedRates.length - 1]?.rateBps ?? 'none'}.`,
+        'Respond ONLY with JSON: { "rate_bps": <int 0..1000>, "rationale": "<one short sentence>" }.',
+        'Move at most 50bps from prior rate. Stay defensive: rising unemployment → cut; rising income/inflation proxies → hold or hike.',
+      ].join('\n');
+      const result = await reasoner.reasonJson<{ rate_bps: number; rationale: string }>({
+        tier: cfg.state.tier,
+        system: deps.systemPrompt,
+        messages: [{ role: 'user', content: prompt }],
+      });
+      rateBps = result.value.rate_bps;
+      rationale = result.value.rationale;
+    } catch (err) {
+      console.warn(`[FED] rate reasoner failed (${String(err)}); using deterministic schedule`);
+    }
+  }
+
+  const input = {
+    rate_bps: rateBps,
+    effective: new Date().toISOString(),
+    rationale,
+  };
+  const results = await broadcastFedRate(cfg, axl, discovery, input);
+  const ok = results.filter((r) => r.ok).length;
+  await memory.appendLog({
+    kind: 'broadcast_sent',
+    at: new Date().toISOString(),
+    summary: `fed_rate=${rateBps}bps → ${ok}/${results.length} peers`,
+    details: { tick: tickNo, input, results },
+  });
 }
 
 async function broadcastFromSnapshot(

@@ -24,12 +24,15 @@ import {
   type AidResponse,
   type AssetAmount,
   type BondAward,
+  type BondBid,
   type CoalitionResponse,
+  type CreditAssessment,
   type EconomicIndicatorKind,
   type ShockContribution,
   type SwapCounter,
   type SwapSettlement,
   type SwapTxLeg,
+  assessCredit,
   getBond,
   getPersona,
   getStateToken,
@@ -45,6 +48,11 @@ import type { AgentConfig } from '../config.ts';
 import type { SwapExecutor } from '../execute.ts';
 import type { Reasoner } from '../reason.ts';
 import type { AgentState } from '../state.ts';
+import {
+  type BondAuctionEvaluation,
+  type BondMintSettler,
+  BondAuctionRegistry,
+} from './bond-auction-registry.ts';
 
 const MAX_NEGOTIATION_ROUNDS = 3;
 
@@ -70,13 +78,26 @@ interface ReasonerDecision {
 }
 
 export class FederatedReserveAgentExecutor implements AgentExecutor {
+  /**
+   * Phase 4 — multi-bidder bond auction coordinator. Each `handleBondBid`
+   * call parks its bid here and awaits the outcome; the registry
+   * evaluates after `windowMs` (or `maxBidsForEval` reached), settles
+   * mint for the winner, and resolves all parked promises.
+   */
+  private readonly bondAuctions: BondAuctionRegistry;
+
   constructor(
     private readonly cfg: AgentConfig,
     private readonly state: AgentState,
     private readonly reasoner?: Reasoner,
     private readonly systemPrompt: string = '',
     private readonly swapExecutor?: SwapExecutor,
-  ) {}
+  ) {
+    this.bondAuctions = new BondAuctionRegistry({
+      windowMs: cfg.bondAuction.windowMs,
+      maxBidsForEval: cfg.bondAuction.maxBidsForEval,
+    });
+  }
 
   async cancelTask(taskId: string, eventBus: ExecutionEventBus): Promise<void> {
     eventBus.publish({
@@ -456,8 +477,15 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
   }
 
   // ========================================================================
-  // bond-auction (Phase 2 single-round; Phase 3 expands)
+  // bond-auction (Phase 4 multi-bidder)
   // ========================================================================
+  //
+  // Phase 3 evaluated each bid immediately and awarded/rejected per task.
+  // Phase 4 coordinates bids per `bond_id` via `BondAuctionRegistry`: each
+  // task parks its bid, awaits the auction outcome, and emits Completed
+  // with the per-bidder award. Lowest yield wins (with credit-rating
+  // floor/ceiling guardrails). The winning bid triggers a single
+  // BondToken.mint inside the registry's settler callback.
 
   private async handleBondBid(
     ctx: RequestContext,
@@ -465,9 +493,10 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     env: Extract<import('@federated-reserve/shared').SkillEnvelope, { skill: 'bond-auction' }>,
   ): Promise<void> {
     console.log(
-      `[${this.cfg.state.abbr}] bond-auction bid received: ${env.bond_id} from FIPS ${env.bidder_fips} principal=${env.principal_usd} yield=${env.bid_yield_bps}bps`,
+      `[${this.cfg.state.abbr}] bond-auction bid received: ${env.bond_id} from FIPS ${env.bidder_fips} principal=$${env.principal_usd} yield=${env.bid_yield_bps}bps`,
     );
-    // We are the issuer. The bidder has submitted a bid. We decide award/reject.
+
+    // Park the task in working state — the auction will resolve it.
     bus.publish({
       kind: 'task',
       id: ctx.taskId,
@@ -476,57 +505,11 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       history: [ctx.userMessage],
     } satisfies Task);
 
-    let award: BondAward;
-    if (this.reasoner && this.cfg.reasoningEnabled) {
-      try {
-        const prompt = [
-          `Skill: bond-auction (you are the issuer of bond ${env.bond_id}).`,
-          `A peer (FIPS ${env.bidder_fips}) has bid: principal=$${env.principal_usd}, yield=${env.bid_yield_bps}bps. Their rationale: "${env.rationale}".`,
-          this.treasuryContextLine(),
-          'Decide whether to award the bid. Lower yield is better for issuer.',
-          'Respond ONLY with JSON: { "kind": "awarded" | "rejected", "yield_bps": <int>, "rationale": "<one sentence>" }',
-          'If awarded, yield_bps should equal the bid yield. If rejected, yield_bps may be your minimum-acceptable yield.',
-        ].join('\n');
-        const result = await this.reasoner.reasonJson<{
-          kind: 'awarded' | 'rejected';
-          yield_bps: number;
-          rationale: string;
-        }>({
-          tier: this.cfg.state.tier,
-          system: this.systemPrompt,
-          messages: [{ role: 'user', content: prompt }],
-        });
-        award = {
-          skill: 'bond-auction',
-          kind: result.value.kind,
-          bond_id: env.bond_id,
-          to_fips: env.bidder_fips,
-          yield_bps: result.value.yield_bps,
-          rationale: result.value.rationale,
-        };
-      } catch (err) {
-        console.warn(`[${this.cfg.state.abbr}] bond reasoner failed; using deterministic accept`);
-        award = this.bondFallback(env);
-      }
-    } else {
-      award = this.bondFallback(env);
-    }
-
-    // Phase 3 settlement (issuer side). On 'awarded', mint the BondToken
-    // to the bidder. Primary-issuance leg only — bidder's USDC payment
-    // fires from their own driver after observing this award.
-    if (award.kind === 'awarded') {
-      const settlement = await this.executeBondMint(env);
-      if (settlement) {
-        award = {
-          ...award,
-          bond_token_address: settlement.bondAddress,
-          principal_usdc_base: settlement.principalUsdcBase.toString(),
-          mint_tx_hash: settlement.txHash,
-          mint_block_number: settlement.blockNumber.toString(),
-        };
-      }
-    }
+    const award = await this.bondAuctions.submitBidAndAwait(
+      env,
+      (auctionCtx) => this.evaluateBondAuction(env.bond_id, auctionCtx.bids),
+      this.makeBondMintSettler(env.bond_id),
+    );
 
     bus.publish({
       kind: 'status-update',
@@ -536,6 +519,120 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       final: true,
     } satisfies TaskStatusUpdateEvent);
     bus.finished();
+  }
+
+  /**
+   * Issuer-side multi-bidder evaluator.
+   *
+   *   1. Score the issuer's own credit (= our state) to derive yield
+   *      floor and ceiling.
+   *   2. Reject bids with yield < floor (predatory; issuer would rather
+   *      not borrow at giveaway terms) or yield > ceiling (too expensive).
+   *   3. Among the eligible, lowest yield wins. Ties broken by largest
+   *      principal (prefer fully-funded bids).
+   *   4. The winner gets `kind=awarded`; everyone else `kind=rejected`.
+   */
+  private async evaluateBondAuction(
+    bondId: string,
+    bids: ReadonlyArray<BondBid>,
+  ): Promise<BondAuctionEvaluation> {
+    const credit = this.assessOwnCredit();
+    const floor = credit.yieldFloorBps;
+    const ceiling = credit.yieldCeilingBps;
+    console.log(
+      `[${this.cfg.state.abbr}] bond-auction ${bondId} closing with ${bids.length} bid(s); ${credit.summary}`,
+    );
+
+    type Eligible = { bid: BondBid; reason: 'eligible' };
+    type Ineligible = { bid: BondBid; reason: 'below-floor' | 'above-ceiling' };
+    const eligible: Eligible[] = [];
+    const ineligible: Ineligible[] = [];
+    for (const b of bids) {
+      if (b.bid_yield_bps < floor) {
+        ineligible.push({ bid: b, reason: 'below-floor' });
+      } else if (b.bid_yield_bps > ceiling) {
+        ineligible.push({ bid: b, reason: 'above-ceiling' });
+      } else {
+        eligible.push({ bid: b, reason: 'eligible' });
+      }
+    }
+    eligible.sort((a, b) => {
+      if (a.bid.bid_yield_bps !== b.bid.bid_yield_bps) {
+        return a.bid.bid_yield_bps - b.bid.bid_yield_bps;
+      }
+      return b.bid.principal_usd - a.bid.principal_usd;
+    });
+
+    const winner = eligible[0]?.bid ?? null;
+    const perBidder: BondAuctionEvaluation['perBidder'] = bids.map((b) => {
+      const ineligibleEntry = ineligible.find((x) => x.bid.bidder_fips === b.bidder_fips);
+      if (ineligibleEntry) {
+        const why =
+          ineligibleEntry.reason === 'below-floor'
+            ? `Below ${floor}bps floor for ${credit.rating} (${this.cfg.state.abbr}).`
+            : `Above ${ceiling}bps ceiling for ${credit.rating} (${this.cfg.state.abbr}).`;
+        return {
+          bidderFips: b.bidder_fips,
+          kind: 'rejected' as const,
+          yieldBps: b.bid_yield_bps,
+          rationale: `${this.cfg.state.abbr} rejects FIPS ${b.bidder_fips}: ${why}`,
+        };
+      }
+      if (winner && b.bidder_fips === winner.bidder_fips) {
+        return {
+          bidderFips: b.bidder_fips,
+          kind: 'awarded' as const,
+          yieldBps: b.bid_yield_bps,
+          rationale: `${this.cfg.state.abbr} awards ${bondId} at ${b.bid_yield_bps}bps (lowest of ${eligible.length} eligible bid${eligible.length === 1 ? '' : 's'}). Rating ${credit.rating}, score ${credit.score.toFixed(1)}.`,
+        };
+      }
+      return {
+        bidderFips: b.bidder_fips,
+        kind: 'rejected' as const,
+        yieldBps: b.bid_yield_bps,
+        rationale: winner
+          ? `${this.cfg.state.abbr} rejects FIPS ${b.bidder_fips}: outbid by FIPS ${winner.bidder_fips} at ${winner.bid_yield_bps}bps.`
+          : `${this.cfg.state.abbr} rejects FIPS ${b.bidder_fips}: no eligible bids in window.`,
+      };
+    });
+
+    return { winnerFips: winner?.bidder_fips ?? null, perBidder };
+  }
+
+  /**
+   * Build the on-chain mint callback for the registry. Returns null when
+   * settlement isn't possible (no SwapExecutor / not the issuer / etc.)
+   * so the auction still resolves but the awarded bidder gets empty
+   * mint metadata — same semantics as Phase 3's `executeBondMint` skip.
+   */
+  private makeBondMintSettler(bondId: string): BondMintSettler {
+    return async (winningBid) => {
+      // Reuse the existing executeBondMint by reconstructing an env-shaped
+      // input. The original handler took env directly; here we pass the
+      // winning bid and bond_id from registry context.
+      return this.executeBondMint({
+        skill: 'bond-auction',
+        issuer_fips: this.cfg.state.fips,
+        bidder_fips: winningBid.bidder_fips,
+        bond_id: bondId,
+        principal_usd: winningBid.principal_usd,
+        bid_yield_bps: winningBid.bid_yield_bps,
+        rationale: winningBid.rationale,
+      });
+    };
+  }
+
+  /** Score this agent's own state for bond issuance pricing. */
+  private assessOwnCredit(): CreditAssessment {
+    const indicators = this.state.ownSnapshot?.indicators ?? {};
+    const unemploymentPct = indicators.unemployment?.value ?? null;
+    const personalIncomeUsd = indicators.personal_income?.value ?? null;
+    return assessCredit(this.cfg.state.abbr, {
+      reserveRatio: this.state.reserveRatio,
+      unemploymentPct,
+      personalIncomeUsd,
+      region: this.cfg.state.region,
+    });
   }
 
   /**
@@ -622,25 +719,8 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     }
   }
 
-  private bondFallback(
-    env: Extract<import('@federated-reserve/shared').SkillEnvelope, { skill: 'bond-auction' }>,
-  ): BondAward {
-    // Deterministic: accept any bid <= 800 bps yield (rough credit guardrail).
-    const ok = env.bid_yield_bps <= 800;
-    return {
-      skill: 'bond-auction',
-      kind: ok ? 'awarded' : 'rejected',
-      bond_id: env.bond_id,
-      to_fips: env.bidder_fips,
-      yield_bps: env.bid_yield_bps,
-      rationale: ok
-        ? `${this.cfg.state.abbr} accepts ${env.bid_yield_bps}bps yield.`
-        : `${this.cfg.state.abbr} rejects ${env.bid_yield_bps}bps as too high.`,
-    };
-  }
-
   // ========================================================================
-  // request-emergency-aid (Phase 2 single-round)
+  // request-emergency-aid (Phase 2 reasoning + Phase 4 onchain settlement)
   // ========================================================================
 
   private async handleAidRequest(
@@ -696,6 +776,25 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       response = this.aidFallback(env);
     }
 
+    // Phase 4 settlement (responder side). On `offered` and when our
+    // wallet is wired up, fire `USDC.transfer(requester, amount)` from
+    // our wallet. Failure does NOT fail the task — the response still
+    // emits with kind=offered but empty settlement metadata; requester's
+    // driver can decide whether to retry or accept the offer at their
+    // own risk.
+    if (response.kind === 'offered' && response.amount_usd > 0) {
+      const settlement = await this.executeAidTransfer(env.requester_fips, response.amount_usd);
+      if (settlement) {
+        response = {
+          ...response,
+          settlement_tx_hash: settlement.txHash,
+          settlement_block_number: settlement.blockNumber.toString(),
+          settlement_amount_usdc_base: settlement.amount.toString(),
+          settlement_recipient: settlement.recipient,
+        };
+      }
+    }
+
     bus.publish({
       kind: 'status-update',
       taskId: ctx.taskId,
@@ -704,6 +803,75 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       final: true,
     } satisfies TaskStatusUpdateEvent);
     bus.finished();
+  }
+
+  /**
+   * Phase 4 — fire `USDC.transfer(requester, amount)` from this agent's
+   * wallet. Returns null when settlement isn't possible (no SwapExecutor,
+   * deployments unavailable, requester wallet unknown, transfer reverts).
+   */
+  private async executeAidTransfer(
+    requesterFips: number,
+    amountUsd: number,
+  ): Promise<
+    | { txHash: string; blockNumber: bigint; amount: bigint; recipient: string }
+    | null
+  > {
+    if (!this.swapExecutor || !this.cfg.settlement.enabled) {
+      console.warn(
+        `[${this.cfg.state.abbr}] aid settlement skip: swapExecutor=${!!this.swapExecutor} enabled=${this.cfg.settlement.enabled}`,
+      );
+      return null;
+    }
+    const requester = lookupStateByFips(requesterFips);
+    if (!requester) {
+      console.warn(`[${this.cfg.state.abbr}] aid settlement skip: unknown requester FIPS ${requesterFips}`);
+      return null;
+    }
+    const requesterAddrEnv = process.env[`WALLET_${requester.abbr}_ADDRESS`];
+    if (!requesterAddrEnv) {
+      console.warn(
+        `[${this.cfg.state.abbr}] aid settlement skip: no WALLET_${requester.abbr}_ADDRESS in env`,
+      );
+      return null;
+    }
+    let deployments: ReturnType<typeof loadDeployments>;
+    try {
+      deployments = loadDeployments('unichain-sepolia');
+    } catch (err) {
+      console.warn(
+        `[${this.cfg.state.abbr}] aid settlement skip: deployments unavailable (${String(err)})`,
+      );
+      return null;
+    }
+    const usdc = getUsdc(deployments);
+    // amount_usd → base units (USDC has 6 decimals). Floor at integer USD.
+    const amountBase = BigInt(Math.floor(amountUsd)) * 1_000_000n;
+    if (amountBase === 0n) return null;
+
+    console.log(
+      `[${this.cfg.state.abbr}] aid settlement: ${requester.abbr} (${requesterAddrEnv}) amount=${amountBase} (${amountUsd} USDC)`,
+    );
+    try {
+      const r = await this.swapExecutor.payIssuer(
+        usdc.address,
+        requesterAddrEnv as `0x${string}`,
+        amountBase,
+      );
+      console.log(
+        `[${this.cfg.state.abbr}]   ✓ aid transfer tx=${r.txHash} block=${r.blockNumber} status=${r.status}`,
+      );
+      if (r.status !== 'success') return null;
+      return {
+        txHash: r.txHash,
+        blockNumber: r.blockNumber,
+        amount: amountBase,
+        recipient: requesterAddrEnv,
+      };
+    } catch (err) {
+      console.warn(`[${this.cfg.state.abbr}]   aid transfer FAILED: ${(err as Error).message}`);
+      return null;
+    }
   }
 
   private aidFallback(

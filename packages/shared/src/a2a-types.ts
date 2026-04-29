@@ -229,6 +229,17 @@ export const aidResponseSchema = z.object({
   amount_usd: z.number().nonnegative(),
   yield_bps: z.number().int(),
   rationale: z.string().min(1).max(500),
+  /**
+   * Phase 4 settlement (responder side). Populated when the responder
+   * fires `USDC.transfer(requester, amount)` from their own wallet on
+   * `offered`. Mirrors the bond-auction `payIssuer` pattern: primary
+   * issuance is direct ERC-20, no AMM. Empty / null when settlement
+   * isn't possible (no SwapExecutor, deployments missing, etc.).
+   */
+  settlement_tx_hash: z.string().nullable().optional(),
+  settlement_block_number: z.string().nullable().optional(),
+  settlement_amount_usdc_base: z.string().nullable().optional(),
+  settlement_recipient: z.string().nullable().optional(),
 });
 export type AidResponse = z.infer<typeof aidResponseSchema>;
 

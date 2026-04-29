@@ -18,6 +18,13 @@ export interface TreasuryAsset {
   balance: string;
 }
 
+export interface FedRateRecord {
+  rateBps: number;
+  effective: string;
+  rationale: string;
+  receivedAt: string;
+}
+
 export interface AgentState {
   composition: TreasuryAsset[];
   reserveRatio: number;
@@ -28,6 +35,8 @@ export interface AgentState {
   ownSnapshot?: StateSnapshot;
   /** Tick counter — survives restarts via memory. */
   tickCount: number;
+  /** Phase 4 — most recent fed rate announcements received from FED. Bounded. */
+  receivedFedRates?: FedRateRecord[];
 }
 
 const RECEIVED_INDICATORS_CAP = 200;
@@ -55,5 +64,15 @@ export function pushReceivedIndicator(
   state.receivedIndicators.push(entry);
   if (state.receivedIndicators.length > RECEIVED_INDICATORS_CAP) {
     state.receivedIndicators.splice(0, state.receivedIndicators.length - RECEIVED_INDICATORS_CAP);
+  }
+}
+
+const FED_RATE_CAP = 32;
+
+export function pushReceivedFedRate(state: AgentState, record: FedRateRecord): void {
+  if (!state.receivedFedRates) state.receivedFedRates = [];
+  state.receivedFedRates.push(record);
+  if (state.receivedFedRates.length > FED_RATE_CAP) {
+    state.receivedFedRates.splice(0, state.receivedFedRates.length - FED_RATE_CAP);
   }
 }

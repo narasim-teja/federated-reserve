@@ -49,6 +49,30 @@
         "symbol": "FLT",
         "decimals": 18,
         "agent": "0x210b16F6516278Ce9decE09664FF3225E2fF0aa2"
+      },
+      "IL": {
+        "address": "0x07655e6201a712cb92462c996334ead03540be7d",
+        "fips": 17,
+        "name": "Illinois Treasury Token",
+        "symbol": "ILT",
+        "decimals": 18,
+        "agent": "0xFF09b3C7DDCf9b04B99dFcFE5818E9A2526F6088"
+      },
+      "WA": {
+        "address": "0xee38b79b622a752fd4fa8ab7b2463d0ebb35cf71",
+        "fips": 53,
+        "name": "Washington Treasury Token",
+        "symbol": "WAT",
+        "decimals": 18,
+        "agent": "0x1cb0C85d73058370C03d1f7cf29488Ffe3Eb2f52"
+      },
+      "AK": {
+        "address": "0xa0153eae2d853e7cdaedcb4ce7849ada307aeef5",
+        "fips": 2,
+        "name": "Alaska Treasury Token",
+        "symbol": "AKT",
+        "decimals": 18,
+        "agent": "0xf79182429761F6Bd5D1CabF263F448AE2bdea889"
       }
     },
     "INFT7857": {
@@ -140,6 +164,51 @@
         "amount1Used": "100000000000",
         "initTx": "0x16bf48d00a49f07031f69f9f269173335fd5e4df8a346656dbaa4b5f72a1bd0b",
         "mintTx": "0x4c9731d44404a95919ea4b97ee840e230dc6f3ff4fe61e800cc483e5094d7d98"
+      },
+      "IL": {
+        "state": "IL",
+        "pair": "ILT-USDC",
+        "token0": "0x07655e6201a712cb92462c996334ead03540be7d",
+        "token1": "0x462b31b02e00d0dec2aeb79437e20e9fa3b96f94",
+        "fee": 3000,
+        "sqrtPriceX96": "79228162514264337593543",
+        "poolAddress": "0x2e20E72090B04fDe87fbbC9693cf40d904623Fb8",
+        "tokenId": "418101",
+        "liquidity": "99999999999999999",
+        "amount0Used": "99999999999999999000002",
+        "amount1Used": "100000000000",
+        "initTx": "0x4d23751c79deb82d95e27e5846a596668bf149ff1f2e451eeb297dc7aac6c2fa",
+        "mintTx": "0x45e88f4a518bff8491143cfe6d75910248ca6a0f3afed2c36f92823cb989f0e0"
+      },
+      "WA": {
+        "state": "WA",
+        "pair": "USDC-WAT",
+        "token0": "0x462b31b02e00d0dec2aeb79437e20e9fa3b96f94",
+        "token1": "0xee38b79b622a752fd4fa8ab7b2463d0ebb35cf71",
+        "fee": 3000,
+        "sqrtPriceX96": "79228162514264337593543950336000000",
+        "poolAddress": "0xAD931699f21f3433624c4310F63d40Bae9991F6F",
+        "tokenId": "418102",
+        "liquidity": "100000000000000000",
+        "amount0Used": "100000000000",
+        "amount1Used": "100000000000000000000000",
+        "initTx": "0x43b49c1972771d4171138ad0ddcad935ea7827ba17687be95a089e5b4de474e2",
+        "mintTx": "0x7c17973c393f6331a6545cb9ae81be386da7ff9e8302a9b3f48e57a492c6bcae"
+      },
+      "AK": {
+        "state": "AK",
+        "pair": "USDC-AKT",
+        "token0": "0x462b31b02e00d0dec2aeb79437e20e9fa3b96f94",
+        "token1": "0xa0153eae2d853e7cdaedcb4ce7849ada307aeef5",
+        "fee": 3000,
+        "sqrtPriceX96": "79228162514264337593543950336000000",
+        "poolAddress": "0x0BF472975928B277d8c35D58C58bea37a3AbE70f",
+        "tokenId": "418103",
+        "liquidity": "100000000000000000",
+        "amount0Used": "100000000000",
+        "amount1Used": "100000000000000000000000",
+        "initTx": "0xc11f5aa3744225b8a215c33c5e7a07b875419044ff087cffe105ce9f13deab54",
+        "mintTx": "0xc202e5407eae574fc3942046fe64b195aa3d2fef02bf431b9c28ed93c0446414"
       }
     }
   },
@@ -170,6 +239,19 @@
       "name": "MA 4.25% 2030 Bond",
       "decimals": 6,
       "deployTx": "0x2609ff843cfc2d2f867c317a9edc85f02edf82e400bedeef8d51aa4efe7d4e3a"
+    },
+    "IL-2030-Q2-A": {
+      "bondId": "IL-2030-Q2-A",
+      "address": "0x9a7cef71789906bfa3154f4978b2dd793cee97be",
+      "issuerFips": 17,
+      "issuerAddr": "0xFF09b3C7DDCf9b04B99dFcFE5818E9A2526F6088",
+      "couponBps": 550,
+      "maturity": "1893456000",
+      "principalUsdcBase": "5000000000",
+      "symbol": "ILB30",
+      "name": "IL 5.50% 2030 Bond",
+      "decimals": 6,
+      "deployTx": "0x243f41b412e52622eb8edcea8e4d9e4e089745b25edf9c54ac8278f96eb83e5f"
     }
   }
 }

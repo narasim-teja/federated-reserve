@@ -62,7 +62,12 @@ if (!CA_PK) throw new Error('WALLET_CA_PRIVATE_KEY missing');
 const BOND_ID = 'MA-2030-Q1-A';
 // Bid for the full principal of the demo bond ($1,000 face value).
 const BID_PRINCIPAL_USD = 1000;
-const BID_YIELD_BPS = 400; // ≤ 800 ⇒ MA's bondFallback awards
+// Phase 4 introduced a credit-rating floor for bond eval (MA at BBB → 550bps
+// floor). We bid 600bps to stay above floor while still being attractive to
+// the issuer. The Phase 3 test originally used 400bps under a deterministic
+// 800bps ceiling; updated for the Phase 4 evaluator without changing what's
+// being tested (single-bid primary issuance settlement).
+const BID_YIELD_BPS = 600;
 
 // ---------- helpers ----------
 
