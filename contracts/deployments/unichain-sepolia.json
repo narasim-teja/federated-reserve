@@ -143,5 +143,33 @@
       }
     }
   },
-  "seededAt": "2026-04-28T21:43:21.705Z"
+  "seededAt": "2026-04-28T21:43:21.705Z",
+  "bonds": {
+    "NY-2030-Q1-A": {
+      "bondId": "NY-2030-Q1-A",
+      "address": "0x135d39b244f7f2d2afe4367d0bda407c446308f9",
+      "issuerFips": 36,
+      "issuerAddr": "0x35755018070DE86339C00c04304C5D74408D700C",
+      "couponBps": 425,
+      "maturity": "1893456000",
+      "principalUsdcBase": "1000000000",
+      "symbol": "NYB30",
+      "name": "NY 4.25% 2030 Bond",
+      "decimals": 6,
+      "deployTx": "0x62d8414173d89bfe6d81c1fc103c552dd2ce98ab2b25c4b7436bbf4896e1cb6d"
+    },
+    "MA-2030-Q1-A": {
+      "bondId": "MA-2030-Q1-A",
+      "address": "0xcfd8fad6e75340ceecb8f688c1cc6036a1e9b5fd",
+      "issuerFips": 25,
+      "issuerAddr": "0x2926E2afC40a62829960C002eEe8F54eb4cEAC88",
+      "couponBps": 425,
+      "maturity": "1893456000",
+      "principalUsdcBase": "1000000000",
+      "symbol": "MAB30",
+      "name": "MA 4.25% 2030 Bond",
+      "decimals": 6,
+      "deployTx": "0x2609ff843cfc2d2f867c317a9edc85f02edf82e400bedeef8d51aa4efe7d4e3a"
+    }
+  }
 }

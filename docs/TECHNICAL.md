@@ -13,8 +13,8 @@
 | Mesh transport | AXL (Gensyn) | Peer-to-peer encrypted transport between agent nodes |
 | Agent-to-agent protocol | `@a2a-js/sdk` (official, A2A v0.3.0) | Multi-turn agent coordination (negotiations, coalitions, auctions) |
 | Tool protocol | `@modelcontextprotocol/sdk` (Anthropic) | Structured tool-style operations between agents |
-| Smart contracts | Foundry + npm Solidity | Bond tokens, ERC-7857 iNFTs, simulated treasuries |
-| Settlement | Uniswap Trading API + Unichain Sepolia | Real onchain swap execution |
+| Smart contracts | Foundry + OpenZeppelin (via `bun add`) | MockUSDC, per-state ERC-20 tokens, BondToken, ERC-7857 iNFT |
+| Settlement | Uniswap Trading API (V3 routes) + Unichain Sepolia | Real onchain swap execution; bond issuance via direct ERC-20 calls (mint + transfer) |
 | Memory / Storage | 0G Storage SDK (`@0glabs/0g-ts-sdk`) | Agent persistent memory (KV + Log) |
 | Identity / Ownership | 0G Chain + ERC-7857 | iNFT contracts representing agent ownership |
 | Reasoning | OpenRouter (Claude via OpenAI-compatible API) | Agent decision-making (deep agents) + lightweight model for observers. **Never use the Anthropic SDK directly** — all LLM calls route through `OPENROUTER_API_KEY`. |
@@ -108,15 +108,41 @@ Other agents discover the AgentCard via AXL peer discovery, then invoke the appr
 **Endpoint reference:** https://developers.uniswap.org/docs/api-reference/create_swap_transaction
 **Developer Portal (get API key):** https://developers.uniswap.org/
 
-**How we use it:**
-- Each state-agent has a wallet (deterministically derived from a master seed for demo purposes — `agent-{state-fips}`).
-- When an agent decides to rebalance: agent calls `/v1/quote` to get pricing, then `/v1/swap` to get calldata, signs and submits via viem on Unichain Sepolia.
-- LP primitive (stretch): state-agents provide liquidity to inter-state token pools, claim fees as yield.
-- **FEEDBACK.md** maintained from Day 1 — every API friction point logged with timestamp.
+**How we use it (Phase 3 ✅):**
+- Each state-agent has a wallet (deterministically derived from
+  `MASTER_SEED` per BIP-44 m/44'/60'/0'/0/{fips}). Pre-Phase-3 wallets
+  funded with 0.05 ETH on Unichain Sepolia + 1M MockUSDC + 1.9M of
+  their own StateToken.
+- When two agents complete a `negotiate-bilateral-swap`, each fires
+  `/v1/check_approval` → `/v1/quote` → Permit2 EIP-712 sign via viem
+  → `/v1/swap` → broadcast on Unichain Sepolia. Implementation:
+  [`packages/agent/src/execute.ts`](../packages/agent/src/execute.ts)
+  (`SwapExecutor` class). Two real swaps per agreed trade — one per
+  side — both visible on
+  [unichain-sepolia.blockscout.com](https://unichain-sepolia.blockscout.com).
+- Pool seeding: 5 V3 USDC×StateToken pools (fee=3000, full-range)
+  seeded via `NonfungiblePositionManager.mint` from the deployer
+  wallet. Trading API's CLASSIC route routes through these on the
+  next request — no subgraph wait needed on Unichain Sepolia.
+  ([`scripts/seed-pools.ts`](../scripts/seed-pools.ts))
+- LP primitive (stretch — deferred to Phase 6/7): use the Trading
+  API's LP endpoints for state-agent-funded positions earning fees.
+- **FEEDBACK.md** maintained from Day 1 — every API friction point
+  logged with timestamp. Phase 3 added 6 entries covering quote
+  ergonomics, testnet support gaps, RPC stale-read, and a real bug
+  (CLASSIC `swap.gasLimit` too tight, OOG inside the pool).
+
+> **Why V3, not V4** (deviation from initial plan): Unichain Sepolia
+> has the canonical V3 Factory + NonfungiblePositionManager deployed
+> at standard addresses; V4 hooks + PositionManager flow is several
+> times more code to seed correctly on testnet, and the Trading API
+> CLASSIC route uses V3 by default. Locked in V3 in Phase 3; revisit
+> V4 in Phase 6/7 if there's time and a clear win.
 
 **Qualification compliance:**
-- ✅ Real Trading API integration with onchain execution
-- ✅ FEEDBACK.md present at repo root
+- ✅ Real Trading API integration with onchain execution (verified by
+  two passing gate tests with explorer links)
+- ✅ FEEDBACK.md present at repo root with substantive entries
 
 ### 0G (Storage + iNFTs)
 
@@ -244,7 +270,10 @@ A2A server). An "agent" is **four cooperating processes on the same host
 │       over discovery view, see MeshDiscovery)      │  │  uses @a2a-js/sdk)   │
 │     - Send MCP calls  (POST :9002/mcp/{peer}/...)  │  │ port :9004           │
 │     - Send A2A skills (POST :9002/a2a/{peer})      │  └─────────▲────────────┘
-│     - Execute swaps (Uniswap Trading API) [Phase 3]│            │
+│     - Execute swaps (Uniswap Trading API,          │            │
+│       Phase 3 ✅; SwapExecutor in execute.ts)       │            │
+│     - Mint/transfer for bond auctions (direct      │            │
+│       ERC-20 calls; Phase 3 ✅)                     │            │
 │  5. Reflect on prior tick outcomes (Phase 2 ✅,    │            │
 │     every REFLECT_EVERY_N_TICKS ticks)             │            │
 │  6. Persist state + log via memory.saveState/      │            │
@@ -283,7 +312,10 @@ Concrete reference: [`packages/agent/src/index.ts`](../packages/agent/src/index.
 > Phase 2 added `packages/data-plane/`, agent-side `memory.ts` /
 > `reason.ts` / `reflect.ts` / `system-prompts.ts` /
 > `data-plane-client.ts`, shared `personas.ts` / `data-plane.ts`,
-> mesh configs for NY+FL, and the Phase 2 gate test. Phases 3-6 add the
+> mesh configs for NY+FL, and the Phase 2 gate test. Phase 3 added
+> `contracts/` (Foundry: MockUSDC + StateToken + BondToken + INFT7857),
+> agent-side `execute.ts` (Uniswap Trading API), shared `deployments.ts`,
+> three deploy scripts, and two Phase 3 gate tests. Phases 4-6 add the
 > rest in-place — paths annotated with their phase.
 
 ```
@@ -322,8 +354,14 @@ federated-reserve/
 │   ├── test-mcp-broadcast.sh   # [Phase 1 gate test] CA → {MA,TX} fan-out
 │   ├── test-a2a-negotiate.sh   # [Phase 1 gate test] multi-turn lifecycle (deterministic stub era)
 │   ├── test-phase2-gate.sh     # [Phase 2 gate test] full Phase 2 deliverable verification
-│   ├── deploy-contracts.ts     # [Phase 3]
-│   ├── seed-pools.ts           # [Phase 3]
+│   ├── deploy-contracts.ts     # [Phase 3 ✅] MockUSDC + 5 StateTokens + INFT7857
+│   ├── seed-pools.ts           # [Phase 3 ✅] 5 V3 USDC×StateToken pools (fee=3000, full-range)
+│   ├── seed-pools-retry.ts     # [Phase 3 ✅] idempotent retry for the 3-of-5 mints
+│   │                           # that hit Unichain Sepolia RPC stale-read
+│   ├── deploy-bond.ts          # [Phase 3 ✅] MA-issued BondToken (one per auction)
+│   ├── smoke-execute.ts        # [Phase 3 ✅] standalone Trading-API swap smoke test
+│   ├── test-phase3-gate.sh     # [Phase 3 gate] bilateral swap two-leg settlement
+│   ├── test-phase3-bond.sh     # [Phase 3 gate] bond auction primary issuance
 │   ├── mint-inft.ts            # [Phase 5]
 │   └── replay-historical.ts    # [Phase 6]
 ├── packages/
@@ -336,6 +374,8 @@ federated-reserve/
 │   │   │   │                   # skillEnvelopeSchema for the 4 Phase 2 skills
 │   │   │   ├── data-plane.ts   # [Phase 2] StateSnapshot / IndicatorObservation / health
 │   │   │   ├── personas.ts     # [Phase 2] hand-tuned posture + coalitions per deep state
+│   │   │   ├── deployments.ts  # [Phase 3] typed loader for contracts/deployments/<chain>.json,
+│   │   │   │                   # asset resolver, getUsdc/getStateToken/getBond
 │   │   │   └── index.ts
 │   │   └── package.json
 │   ├── agent/                  # [Phase 1+2] per-agent runtime — single Bun process
@@ -353,12 +393,17 @@ federated-reserve/
 │   │   │   ├── discovery.ts        # 1-hop MCP gossip (share_topology refresh loop)
 │   │   │   ├── broadcast.ts        # app-level fan-out helper (uses discovery)
 │   │   │   ├── tick.ts             # data-plane snapshot → broadcast → memory.saveState → reflect
+│   │   │   ├── execute.ts          # [Phase 3] SwapExecutor — Uniswap Trading API client (viem-backed):
+│   │   │   │                       #   /check_approval → /quote → Permit2 sign → /swap → confirm,
+│   │   │   │                       #   plus mintBond/payIssuer for bond settlement.
 │   │   │   ├── mcp/
 │   │   │   │   └── server.ts       # factory-pattern MCP server (Bun.serve)
 │   │   │   └── a2a/
 │   │   │       ├── card.ts         # persona-driven AgentCard generator (Phase 2)
 │   │   │       ├── server.ts       # @a2a-js/sdk JsonRpcTransportHandler on Bun.serve
-│   │   │       └── executor.ts     # AgentExecutor — Phase 1 negotiate + Phase 2 four new skills, all reasoner-driven
+│   │   │       └── executor.ts     # AgentExecutor — Phase 1 negotiate + Phase 2 four new skills,
+│   │   │                           # all reasoner-driven; Phase 3 fires onchain settlement
+│   │   │                           # (responder leg of negotiate-bilateral-swap, mint on bond-auction award)
 │   │   ├── package.json
 │   │   └── tsconfig.json
 │   ├── data-plane/             # [Phase 2] FRED ingestion sidecar (HTTP service)
@@ -375,12 +420,18 @@ federated-reserve/
 │   └── frontend/               # [Phase 5] Next.js
 │       ├── app/, components/
 │       └── package.json
-├── contracts/                  # [Phase 3] Foundry, npm-managed
-│   ├── foundry.toml
-│   ├── package.json
-│   ├── src/{StateToken,BondToken,INFT7857}.sol
-│   ├── script/
-│   └── test/
+├── contracts/                  # [Phase 3 ✅] Foundry, npm-managed (OpenZeppelin via bun)
+│   ├── foundry.toml            # node_modules + lib remap, solc 0.8.24
+│   ├── package.json            # @openzeppelin/contracts 5.1.0
+│   ├── src/
+│   │   ├── MockUSDC.sol        # 6-decimal ERC-20, public mint() (testnet only)
+│   │   ├── StateToken.sol      # ERC-20 per state, 18 decimals, owner-mintable
+│   │   ├── BondToken.sol       # ERC-20, 6 decimals (matches USDC face value);
+│   │   │                       # immutable {issuer, fips, couponBps, maturity, principal}
+│   │   └── INFT7857.sol        # ERC-7857 skeleton (Phase 3 deploy + tests; Phase 5 mints)
+│   ├── test/                   # 13 tests, all passing (forge test)
+│   └── deployments/
+│       └── unichain-sepolia.json  # canonical address book consumed by agents + scripts
 └── deploy/                     # [Phase 6]
     ├── docker/agent.Dockerfile
     ├── compose/local-mesh.yml
@@ -535,12 +586,27 @@ Task lifecycle: Working → InputRequired (per round) → Completed | Canceled
 
 #### `bond-auction`
 
-Issuer opens auction (broadcast via `announce_bond_auction` MCP tool first). Bidders submit bids as A2A tasks. Issuer evaluates and awards. Auction is itself an A2A task with multiple bidder sub-tasks.
+Issuer pre-deploys the `BondToken` contract on Unichain Sepolia
+(constructor sets `issuer = issuer_wallet`, `onlyIssuer` mint).
+Issuer optionally broadcasts `announce_bond_auction` via the MCP tool
+to invite bids; bidders submit bids as A2A `bond-auction` tasks
+(`bondBidSchema`). Issuer evaluates and on `awarded` fires
+`BondToken.mint(bidder, principal)` from its agent process — the
+mint tx hash + bond contract address are embedded in the
+`BondAward` payload so the bidder can verify and follow up. Bidder's
+process then fires `USDC.transfer(issuer, principal)`. **Settlement
+is direct ERC-20 calls, not Uniswap** — primary issuance does not
+route through an AMM. (Phase 3 ✅; see
+[`packages/agent/src/a2a/executor.ts`](../packages/agent/src/a2a/executor.ts)
+`handleBondBid` + `executeBondMint`.)
 
 ```
-Issuer task: Working (collecting) → Working (evaluating) → Completed (allocated)
-Bidder task: Working (submitted) → Completed (won | lost)
+Issuer task: Working (collecting) → Completed (awarded + mint tx populated | rejected)
+Bidder task: send bid → receive BondAward → fire USDC.transfer(issuer, principal)
 ```
+
+Phase 4 expands this to multi-bidder collection (issuer waits N bids
+before awarding the lowest yield).
 
 #### `request-emergency-aid`
 
@@ -875,37 +941,203 @@ green, 0 warnings, 0 failures** when FRED + OpenRouter keys are populated.
 
 **Deliverable:** 5-agent mesh on bare Bun processes with real FRED data, reasoner-driven negotiation + 4 additional A2A skills, persona-driven AgentCards, per-agent disk memory, and a working reflection loop. Commit `phase-2-memory-reasoning`.
 
-### Phase 3 — Settlement (Day 3)
+### Phase 3 — Settlement (Day 3) — ✅ COMPLETE 2026-04-28
 
 **Purpose:** Money actually moves. This is the Uniswap track deliverable.
 
-- [ ] `contracts/` Foundry project. Three contracts:
-  - `StateToken.sol` — per-state ERC-20 representing state's locally-issued exposure
-  - `BondToken.sol` — bond instrument with coupon/maturity
-  - `INFT7857.sol` — ERC-7857 iNFT (build now, mint in Phase 5)
-- [ ] Deployment script. Deploy one StateToken per deep-state (8 contracts). Verify all on Unichain Sepolia explorer
-- [ ] Seed Uniswap V4 pools on Unichain Sepolia: USDC paired with each StateToken (8 pools). Use the LP API
-- [ ] `packages/agent/src/execute.ts` — Uniswap Trading API integration. Quote → swap → submit → confirm. Wallet per agent (deterministic from seed)
-- [ ] First end-to-end: agent A proposes swap via MCP to agent B, agent B accepts, both execute their legs on Unichain. Verify both wallets show updated balances on explorer
-- [ ] Bond issuance flow: agent issues a BondToken, fans out an `announce_bond_auction` MCP broadcast, peer agents bid via MCP, settlement via Uniswap
+**Outcome:** Two onchain settlement primitives shipped, both verified
+end-to-end on Unichain Sepolia (chain 1301):
 
-**Deliverable:** Real onchain swaps fired by AXL message exchange. FEEDBACK.md started with first batch of API friction notes. Commit `phase-3-settlement`.
+1. **Bilateral swap** — `negotiate-bilateral-swap` A2A skill now fires
+   the responder's leg via the Uniswap Trading API on transition to
+   `Completed`; the initiator's driver fires the mirror leg after
+   observing the Completed event. Two real Uniswap swaps per agreed
+   trade, both wallets show rebalanced balances on the explorer.
+2. **Bond auction primary issuance** — `bond-auction` A2A skill now
+   fires `BondToken.mint(bidder, principal)` from the issuer's wallet
+   on `awarded`; the bidder's driver follows up with
+   `USDC.transfer(issuer, principal)`. Direct ERC-20 settlement, no
+   AMM involved (correctly — primary issuance is not a market trade).
+
+Both gate tests pass (`scripts/test-phase3-gate.sh` and
+`scripts/test-phase3-bond.sh`). Phase 1 + Phase 2 gate tests stay green.
+Six new FEEDBACK.md entries cover the Uniswap track in detail
+(delights + bugs).
+
+> **Pulled forward / changed from this phase's original plan**:
+> - **5 deep StateTokens, not 8.** MA/CA/TX/NY/FL ship in Phase 3 to
+>   match the Phase 1+2 mesh (the 5-agent local mesh that was already
+>   running). IL/WA/AK contracts + pools land in Phase 4 alongside
+>   the federation scale-up to 12 processes.
+> - **Uniswap V3, not V4.** V3's NonfungiblePositionManager is
+>   deployed on Unichain Sepolia and the Trading API's CLASSIC route
+>   uses it by default; V4 deployment + LP-API testnet support was
+>   not verified, and V3 keeps the seeding script ~150 lines instead
+>   of a multi-day V4 hooks build.
+> - **NonfungiblePositionManager direct calls, not the LP API.** The
+>   original plan said "Use the LP API"; we used `viem` against the
+>   canonical NPM at `0xB7F724…D075` for deterministic, scriptable
+>   pool seeding. The Trading API's `/quote` indexer picked up the
+>   freshly-seeded pools on the very next request — no subgraph wait.
+> - **MockUSDC.sol added.** No canonical USDC on Unichain Sepolia, so
+>   we deployed a 6-decimal `MockUSDC` with public `mint()`. Each
+>   state agent self-funded.
+> - **Bond settlement via direct ERC-20, not Uniswap.** The original
+>   plan said "settlement via Uniswap" for bonds; that conflated
+>   primary issuance with secondary trading. Bonds at issuance are
+>   `BondToken.mint` + `USDC.transfer`, no AMM. Secondary trading
+>   could route through Uniswap pools later but isn't Phase 3 scope.
+> - **Bond auction bids over A2A, not MCP.** TECHNICAL.md draft said
+>   "peers bid via MCP"; the actual schema (Phase 2) wires it as the
+>   `bond-auction` A2A skill. Phase 3 keeps that and adds settlement.
+> - **BondToken.decimals = 6** (overriding ERC20's default 18) so
+>   `mint(bidder, principal)` reads 1:1 against USDC face value with
+>   no scale conversion. Cleaner audit trail.
+> - **Demo bond issued by MA (the bootstrap), not NY.** AXL's
+>   bootstrap-spoke topology in the local mesh routes leaf→hub
+>   traffic reliably but hub→leaf less so (we observed silent
+>   misrouting of `/a2a/{leaf_key}` from MA's AXL); for the gate test
+>   the bidder is CA (a leaf) sending to MA (the hub). On Fly.io
+>   with full geographic peering (Phase 6) any state can issue.
+
+#### Onchain artifacts (Unichain Sepolia chain 1301)
+
+| Contract            | Address                                              | Notes                                |
+| ------------------- | ---------------------------------------------------- | ------------------------------------ |
+| MockUSDC            | `0x462b31b02e00d0dec2aeb79437e20e9fa3b96f94`         | 6 decimals, public `mint()`          |
+| StateToken MA (MAT) | `0x7a87ff3dd531e79a2d08720374beb9670b9f2780`         | 18 decimals, deployer-mintable       |
+| StateToken CA (CAT) | `0x0411752c54f84d35d99c55937fb70d66382b0645`         |                                      |
+| StateToken TX (TXT) | `0x4cdf222770c0231204446f3c516cb8664bd9948a`         |                                      |
+| StateToken NY (NYT) | `0xb42274bbc44ffcacd746a5d5ebe7fcabfd9b53be`         |                                      |
+| StateToken FL (FLT) | `0x03d93986991d5ee4c43528f02bffad1a54172c0e`         |                                      |
+| INFT7857            | `0xdad62bba075bc0193551c91cc5db79e558e5e5db`         | Phase 5 mints                        |
+| BondToken MA-2030   | `0xcfd8fad6e75340ceecb8f688c1cc6036a1e9b5fd`         | issuer=MA, 4.25% coupon, 2030-01-01  |
+
+5 V3 pools (USDC × StateToken, fee=3000, full-range) seeded from
+deployer wallet via `NonfungiblePositionManager.mint`. Pool addresses
+in [`contracts/deployments/unichain-sepolia.json`](../contracts/deployments/unichain-sepolia.json).
+
+#### Checklist
+
+- [x] **`contracts/` Foundry project** ([contracts/](../contracts/))
+  scaffolded with OpenZeppelin via bun (no submodules), 4 contracts +
+  13 passing Foundry tests:
+  - [x] `MockUSDC.sol` — testnet stand-in, 6 decimals, public mint
+  - [x] `StateToken.sol` — per-state ERC-20, 18 decimals,
+    owner-mintable, FIPS metadata
+  - [x] `BondToken.sol` — per-bond ERC-20, **6 decimals** (overrides
+    ERC20 default), immutable issuer + coupon + maturity + principal,
+    `onlyIssuer` mint
+  - [x] `INFT7857.sol` — ERC-7857 skeleton with encrypted-URI hook
+- [x] **Deployment script** ([scripts/deploy-contracts.ts](../scripts/deploy-contracts.ts))
+  deploys MockUSDC + 5 StateTokens + INFT7857 in one pass; mints USDC
+  + transfers initial StateToken supply to each state wallet; persists
+  full address book to `contracts/deployments/unichain-sepolia.json`.
+- [x] **Pool seeding** ([scripts/seed-pools.ts](../scripts/seed-pools.ts)
+  + [scripts/seed-pools-retry.ts](../scripts/seed-pools-retry.ts)):
+  V3 USDC×StateToken pools at fee=3000, full-range LP from deployer.
+  The retry script is idempotent and exists because Unichain Sepolia
+  RPC stale-read after `createAndInitializePoolIfNecessary` reverted
+  the same-tx mint for 3 of 5 pools on the first run — see
+  [FEEDBACK.md](../FEEDBACK.md) for the full incident.
+- [x] **`packages/agent/src/execute.ts`** — `SwapExecutor` class:
+  full Trading API flow (`/check_approval` → `/quote` → Permit2
+  EIP-712 sign via viem → `/swap` → broadcast → confirm). Auto-
+  estimates gas with 25% headroom (the API-returned `swap.gasLimit`
+  was occasionally too tight for the inner pool-side ERC-20 transfer
+  and OOG'd with "TF" — see FEEDBACK.md). Also exposes `mintBond` and
+  `payIssuer` helpers for bond settlement.
+- [x] **Bilateral swap settlement wired into A2A executor**
+  ([packages/agent/src/a2a/executor.ts](../packages/agent/src/a2a/executor.ts)).
+  When `negotiate-bilateral-swap` reaches Completed, the responder
+  fires its mirror leg (USDC → initiator's StateToken) and embeds the
+  result in the settlement payload. Schema extended to
+  `legs.{initiator,responder}` with full per-leg tx metadata
+  ([packages/shared/src/a2a-types.ts](../packages/shared/src/a2a-types.ts)).
+- [x] **First end-to-end (gate test)** —
+  [scripts/test-phase3-gate.sh](../scripts/test-phase3-gate.sh) drives
+  CA(initiator) ↔ MA(responder) negotiation, confirms responder leg
+  in the settlement, then fires initiator leg from the test driver.
+  Asserts MA: −100 USDC + ≈99.6 CAT; CA: −100 USDC + ≈99.6 MAT.
+  Both txs visible on `unichain-sepolia.blockscout.com`.
+- [x] **Bond issuance flow** —
+  [scripts/deploy-bond.ts](../scripts/deploy-bond.ts) deploys a single
+  `BondToken` per auction (issuer set in constructor). The
+  `bond-auction` A2A handler in `executor.ts` looks up the bond by
+  `bond_id`, mints to the bidder via `BondToken.mint`, and embeds
+  `mint_tx_hash` + `bond_token_address` in the `BondAward` payload.
+  [scripts/test-phase3-bond.sh](../scripts/test-phase3-bond.sh) drives
+  CA(bidder) → MA(issuer) bid, asserts mint, fires CA's
+  `USDC.transfer(MA)`, and asserts $1,000 face value MAB30 in CA's
+  wallet + $1,000 USDC delta in MA's wallet.
+
+#### Phase 3 gate — ✅ both tests PASS
+
+```
+scripts/test-phase3-gate.sh   (bilateral swap)
+  ✓ mesh reachable, both pubkeys resolved
+  ✓ round 1: input-required + counter received
+  ✓ round 2: completed with settlement payload
+  ✓ responder leg: tx=0xcb8077dc…  (USDC → CAT, MA's wallet)
+  ✓ initiator leg: tx=0xe1b4e992…  (USDC → MAT, CA's wallet)
+  ✓ both wallets rebalanced (USDC out, peer-state-token in)
+
+scripts/test-phase3-bond.sh   (bond auction primary issuance)
+  ✓ mesh reachable, both pubkeys resolved
+  ✓ issuer (MA) minted BondToken to bidder (CA)
+  ✓ bidder (CA) paid issuer (MA) via direct USDC.transfer
+  ✓ settled: CA holds bond face value, MA received principal in USDC
+```
+
+#### Bugs surfaced + fixed during Phase 3
+
+1. **Unichain Sepolia RPC stale-read across writes.** After
+   `createAndInitializePoolIfNecessary`, the same RPC node returned
+   `factory.getPool(...) == 0x0` for ~1-3s, and a follow-up
+   `mint` call read the pool's `slot0.sqrtPriceX96` as 0 and
+   reverted with "TF". Workaround:
+   `seed-pools-retry.ts` polls slot0 until non-zero, then mints.
+   Same gotcha hit the post-swap balance reads in the smoke test —
+   `balAfterChange` polls until the value moves.
+2. **Trading API CLASSIC `swap.gasLimit` occasionally too tight.**
+   The pool's inner ERC-20 transfer to recipient hit OutOfGas with
+   the API-returned gas limit (~95k), reverting with "TF". Fix in
+   `execute.ts`: ignore `swap.gasLimit`, run `eth_estimateGas`
+   ourselves, add 25% headroom. Documented in FEEDBACK.md.
+3. **Token bucket race in data plane** (Phase 2 carryover but
+   re-confirmed — no Phase 3 regression).
+
+**Deliverable:** Real onchain swaps + bond issuance fired by AXL
+message exchange. FEEDBACK.md updated with 6 Phase 3 entries
+(delights + bugs). Commit `phase-3-settlement`.
 
 ### Phase 4 — Federation Scale-up (Day 4)
 
-**Purpose:** Make it look and feel like a real federation, not a 3-node toy.
+**Purpose:** Make it look and feel like a real federation, not a 5-node toy.
 
+> **Picked up from Phase 3:** the 3 deep states deferred from Phase 3
+> (IL/WA/AK) need their StateToken contracts deployed, V3 pools
+> seeded, and mesh configs added so the full 8-deep-state set is
+> onchain and routable. Folded into the scale-up below.
+
+- [ ] **Onchain backfill (deferred from Phase 3)**: deploy IL/WA/AK
+  StateTokens via [`scripts/deploy-contracts.ts`](../scripts/deploy-contracts.ts)
+  (parameterize the `STATES` array), seed 3 more V3 pools via
+  [`scripts/seed-pools.ts`](../scripts/seed-pools.ts), append to
+  `contracts/deployments/unichain-sepolia.json`. Result: 8 StateTokens
+  + 8 USDC×StateToken pools, matching the original Phase 3 target.
 - [ ] Federal Reserve agent — sets rate quarterly, issues `announce_fed_rate` broadcasts
-- [ ] Treasury agent — manages federal-to-state transfers, can issue `issue_federal_transfer`
-- [ ] Algorithmic credit rating logic — meta-process scoring each state on debt-to-revenue, reserve ratio, recent performance. Affects bond auction yields
+- [ ] Treasury agent — manages federal-to-state transfers, can issue `issue_federal_transfer` (USDC.transfer from Treasury wallet, gated by reasoner-driven approval)
+- [ ] Algorithmic credit rating logic — meta-process scoring each state on debt-to-revenue, reserve ratio, recent performance. Affects bond auction yields (the BondAward yield_bps field)
+- [ ] **Multi-bidder bond auction**: extend the `bond-auction` skill so the issuer collects N bids before awarding (not single-bid as in Phase 3). Issuer evaluates by yield_bps, awards lowest yield, mints to winner. Schema already supports the structure; this is an issuer-side state machine change.
 - [ ] Coalition formation flow — A2A multi-turn negotiation that converges on a coalition agreement
-- [ ] Aid request → grant flow — distressed state requests aid via MCP, peers respond
-- [ ] Scale local mesh to 10 deep agents + Federal + Treasury (12 Bun processes locally; containerization still deferred to Phase 6) — extend [`scripts/run-local-mesh.sh`](../scripts/run-local-mesh.sh) and [`mesh/configs/`](../mesh/configs/)
+- [ ] Aid request → grant flow — distressed state requests aid via A2A `request-emergency-aid` skill (Phase 2 wired; Phase 4 adds onchain USDC settlement on accepted offer, mirroring the bond `payIssuer` pattern)
+- [ ] Scale local mesh to 10 deep agents + Federal + Treasury (12 Bun processes locally; containerization still deferred to Phase 6) — extend [`scripts/run-local-mesh.sh`](../scripts/run-local-mesh.sh) and [`mesh/configs/`](../mesh/configs/) with IL/WA/AK + Fed + Treasury configs. **Add Listen entries to all leaves** to convert the bootstrap-spoke topology to a full mesh, fixing the leaf→leaf AXL routing asymmetry observed in Phase 3 bond gate.
 - [ ] Add NOAA event ingestion to data plane
 - [ ] Add GDELT state-tagged news ingestion
 - [ ] First shock injection test: synthetic hurricane in FL, verify catastrophe response flows through mesh
 
-**Deliverable:** 12 agents running concurrently in mesh, real federal mechanics, shock test passing. Commit `phase-4-federation-scaleup`.
+**Deliverable:** 12 agents running concurrently in mesh, real federal mechanics, 8 onchain StateTokens + pools, multi-bidder bond auction working, shock test passing. Commit `phase-4-federation-scaleup`.
 
 ### Phase 5 — Frontend + iNFTs (Day 5)
 

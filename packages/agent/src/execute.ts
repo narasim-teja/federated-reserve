@@ -26,6 +26,7 @@ import {
   createPublicClient,
   createWalletClient,
   http,
+  parseAbi,
 } from 'viem';
 import { type PrivateKeyAccount, privateKeyToAccount } from 'viem/accounts';
 
@@ -336,6 +337,52 @@ export class SwapExecutor {
     });
     const r = await this.publicClient.waitForTransactionReceipt({ hash });
     return { txHash: hash, blockNumber: r.blockNumber, status: r.status };
+  }
+
+  /**
+   * Phase 3 bond settlement helper — issuer-side mint of BondToken to the
+   * winning bidder. The signer (`this.account`) MUST be the bond contract's
+   * `issuer` (set at deploy time) or the call reverts with `OnlyIssuer`.
+   *
+   * Bonds are primary issuance: this is *not* a Uniswap swap. The bidder
+   * pays the issuer separately via a direct USDC.transfer (see `payIssuer`).
+   */
+  async mintBond(
+    bondAddress: Address,
+    to: Address,
+    amount: bigint,
+  ): Promise<{ txHash: Hex; blockNumber: bigint; status: 'success' | 'reverted' }> {
+    const txHash = await this.walletClient.writeContract({
+      account: this.account,
+      chain: null,
+      address: bondAddress,
+      abi: parseAbi(['function mint(address to, uint256 amount)']),
+      functionName: 'mint',
+      args: [to, amount],
+    });
+    const r = await this.publicClient.waitForTransactionReceipt({ hash: txHash });
+    return { txHash, blockNumber: r.blockNumber, status: r.status };
+  }
+
+  /**
+   * Phase 3 bond settlement helper — bidder-side payment to the issuer.
+   * Direct ERC-20 transfer of USDC; primary issuance leg, no AMM involved.
+   */
+  async payIssuer(
+    usdcAddress: Address,
+    issuer: Address,
+    amount: bigint,
+  ): Promise<{ txHash: Hex; blockNumber: bigint; status: 'success' | 'reverted' }> {
+    const txHash = await this.walletClient.writeContract({
+      account: this.account,
+      chain: null,
+      address: usdcAddress,
+      abi: parseAbi(['function transfer(address to, uint256 amount) returns (bool)']),
+      functionName: 'transfer',
+      args: [issuer, amount],
+    });
+    const r = await this.publicClient.waitForTransactionReceipt({ hash: txHash });
+    return { txHash, blockNumber: r.blockNumber, status: r.status };
   }
 
   /** Convenience: end-to-end swap, returning a structured result for the

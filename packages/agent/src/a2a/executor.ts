@@ -30,6 +30,7 @@ import {
   type SwapCounter,
   type SwapSettlement,
   type SwapTxLeg,
+  getBond,
   getPersona,
   getStateToken,
   getUsdc,
@@ -463,6 +464,9 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     bus: ExecutionEventBus,
     env: Extract<import('@federated-reserve/shared').SkillEnvelope, { skill: 'bond-auction' }>,
   ): Promise<void> {
+    console.log(
+      `[${this.cfg.state.abbr}] bond-auction bid received: ${env.bond_id} from FIPS ${env.bidder_fips} principal=${env.principal_usd} yield=${env.bid_yield_bps}bps`,
+    );
     // We are the issuer. The bidder has submitted a bid. We decide award/reject.
     bus.publish({
       kind: 'task',
@@ -508,6 +512,22 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       award = this.bondFallback(env);
     }
 
+    // Phase 3 settlement (issuer side). On 'awarded', mint the BondToken
+    // to the bidder. Primary-issuance leg only — bidder's USDC payment
+    // fires from their own driver after observing this award.
+    if (award.kind === 'awarded') {
+      const settlement = await this.executeBondMint(env);
+      if (settlement) {
+        award = {
+          ...award,
+          bond_token_address: settlement.bondAddress,
+          principal_usdc_base: settlement.principalUsdcBase.toString(),
+          mint_tx_hash: settlement.txHash,
+          mint_block_number: settlement.blockNumber.toString(),
+        };
+      }
+    }
+
     bus.publish({
       kind: 'status-update',
       taskId: ctx.taskId,
@@ -516,6 +536,90 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       final: true,
     } satisfies TaskStatusUpdateEvent);
     bus.finished();
+  }
+
+  /**
+   * Phase 3 — when this agent is the bond's issuer and the award is
+   * `awarded`, mint the BondToken to the bidder. Returns null when
+   * settlement isn't possible (no SwapExecutor, bond not in deployments,
+   * not the issuer, etc.) so the award still emits with kind=awarded but
+   * empty mint metadata — the auction logic itself stays decoupled from
+   * onchain availability.
+   */
+  private async executeBondMint(
+    env: Extract<import('@federated-reserve/shared').SkillEnvelope, { skill: 'bond-auction' }>,
+  ): Promise<
+    | { bondAddress: string; principalUsdcBase: bigint; txHash: string; blockNumber: bigint }
+    | null
+  > {
+    if (!this.swapExecutor || !this.cfg.settlement.enabled) {
+      console.warn(
+        `[${this.cfg.state.abbr}] bond mint skip: swapExecutor=${!!this.swapExecutor} settlement.enabled=${this.cfg.settlement.enabled}`,
+      );
+      return null;
+    }
+    let deployments: ReturnType<typeof loadDeployments>;
+    try {
+      deployments = loadDeployments('unichain-sepolia');
+    } catch (err) {
+      console.warn(
+        `[${this.cfg.state.abbr}] bond mint skip: deployments unavailable (${String(err)})`,
+      );
+      return null;
+    }
+    const bond = getBond(deployments, env.bond_id);
+    if (!bond) {
+      console.warn(`[${this.cfg.state.abbr}] bond mint skip: ${env.bond_id} not deployed`);
+      return null;
+    }
+    if (bond.issuerFips !== this.cfg.state.fips) {
+      console.warn(
+        `[${this.cfg.state.abbr}] bond mint skip: issuer FIPS ${bond.issuerFips} != my FIPS ${this.cfg.state.fips}`,
+      );
+      return null;
+    }
+    const bidder = lookupStateByFips(env.bidder_fips);
+    if (!bidder) {
+      console.warn(`[${this.cfg.state.abbr}] bond mint skip: unknown bidder FIPS ${env.bidder_fips}`);
+      return null;
+    }
+    const bidderAddrEnv = process.env[`WALLET_${bidder.abbr}_ADDRESS`];
+    if (!bidderAddrEnv) {
+      console.warn(
+        `[${this.cfg.state.abbr}] bond mint skip: no WALLET_${bidder.abbr}_ADDRESS in env`,
+      );
+      return null;
+    }
+
+    // Mint the principal amount the bidder bid for. Cap at the bond's
+    // declared principal so a bidder can't request more than was offered.
+    const offered = BigInt(bond.principalUsdcBase);
+    const requested = BigInt(env.principal_usd) * 1_000_000n; // USD → 6-decimal base units
+    const amount = requested > offered ? offered : requested;
+
+    console.log(
+      `[${this.cfg.state.abbr}] bond mint: ${env.bond_id} → ${bidder.abbr} (${bidderAddrEnv}) amount=${amount}`,
+    );
+    try {
+      const r = await this.swapExecutor.mintBond(
+        bond.address as `0x${string}`,
+        bidderAddrEnv as `0x${string}`,
+        amount,
+      );
+      console.log(
+        `[${this.cfg.state.abbr}]   ✓ bond mint tx=${r.txHash} block=${r.blockNumber} status=${r.status}`,
+      );
+      if (r.status !== 'success') return null;
+      return {
+        bondAddress: bond.address,
+        principalUsdcBase: amount,
+        txHash: r.txHash,
+        blockNumber: r.blockNumber,
+      };
+    } catch (err) {
+      console.warn(`[${this.cfg.state.abbr}]   bond mint FAILED: ${(err as Error).message}`);
+      return null;
+    }
   }
 
   private bondFallback(

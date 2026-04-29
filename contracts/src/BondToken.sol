@@ -49,6 +49,13 @@ contract BondToken is ERC20 {
         principal = principal_;
     }
 
+    /// @notice Match USDC (the settlement currency) at 6 decimals so the
+    ///         bond's face value reads 1:1 against USDC base units. Phase 3
+    ///         keeps `mint(bidder, principal)` clean and unambiguous.
+    function decimals() public pure override returns (uint8) {
+        return 6;
+    }
+
     /// Issuer mints the principal amount to the awarded bidder once the
     /// bidder's USDC transfer has been confirmed (caller responsibility).
     function mint(address to, uint256 amount) external onlyIssuer {

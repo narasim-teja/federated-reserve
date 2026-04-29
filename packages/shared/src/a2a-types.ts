@@ -200,6 +200,15 @@ export const bondAwardSchema = z.object({
   to_fips: fipsSchema,
   yield_bps: z.number().int(),
   rationale: z.string().min(1).max(500),
+  /**
+   * Phase 3 settlement (issuer side). Populated when the issuer mints the
+   * BondToken to the awarded bidder. Bidder's USDC payment leg is fired by
+   * the bidder's own driver after observing this award.
+   */
+  bond_token_address: z.string().nullable().optional(),
+  principal_usdc_base: z.string().nullable().optional(),
+  mint_tx_hash: z.string().nullable().optional(),
+  mint_block_number: z.string().nullable().optional(),
 });
 export type BondAward = z.infer<typeof bondAwardSchema>;
 

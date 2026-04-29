@@ -63,6 +63,22 @@ export interface ContractDeployments {
     >;
   };
   seededAt?: string;
+  bonds?: Record<
+    string, // bondId, e.g. "NY-2030-Q1-A"
+    {
+      bondId: string;
+      address: Hex0x;
+      issuerFips: number;
+      issuerAddr: Hex0x;
+      couponBps: number;
+      maturity: string;
+      principalUsdcBase: string;
+      symbol: string;
+      name: string;
+      decimals: 6;
+      deployTx: Hex0x;
+    }
+  >;
 }
 
 /**
@@ -137,4 +153,13 @@ export function resolveAsset(d: ContractDeployments, assetId: string): TokenInfo
   if (d.contracts.StateTokens[base]) return getStateToken(d, base);
   if (d.contracts.StateTokens[id]) return getStateToken(d, id);
   throw new Error(`cannot resolve asset "${assetId}" — known: USDC, ${Object.keys(d.contracts.StateTokens).join(', ')}`);
+}
+
+/** Look up a deployed bond by id; returns undefined if Phase 3 bond deploys
+ *  haven't run yet, or the bondId is unknown. */
+export function getBond(
+  d: ContractDeployments,
+  bondId: string,
+): NonNullable<ContractDeployments['bonds']>[string] | undefined {
+  return d.bonds?.[bondId];
 }
