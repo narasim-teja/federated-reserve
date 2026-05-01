@@ -2,8 +2,26 @@
 
 import { useEffect, useMemo } from 'react';
 import { useUsAtlas, useStateLookup } from '@/hooks/use-us-atlas';
+import { lookupStateByFips } from '@/lib/states';
 import type { Health, StateView, SwapEvent } from '@/lib/types';
 import { cn } from '@/lib/utils';
+
+const VIEWBOX_W = 975;
+const VIEWBOX_H = 610;
+
+function compactAmount(raw: string, asset: string): string {
+  // USDC and StateTokens both use 6 decimals in agent state. Strip them and
+  // render in a human-readable compact form.
+  try {
+    const big = BigInt(raw);
+    const scaled = Number(big) / 1e6;
+    if (scaled >= 1_000_000) return `${(scaled / 1_000_000).toFixed(2)}M ${asset}`;
+    if (scaled >= 1_000) return `${(scaled / 1_000).toFixed(0)}k ${asset}`;
+    return `${scaled.toFixed(2)} ${asset}`;
+  } catch {
+    return `${raw} ${asset}`;
+  }
+}
 
 interface GeoMapProps {
   states: StateView[];
@@ -261,6 +279,41 @@ export function GeoMap({
           </g>
         )}
       </svg>
+
+      {/* Capital-flow labels — HTML overlay so the typography sits above SVG */}
+      {arcs && arcs.length > 0 && (
+        <div className="pointer-events-none absolute inset-0">
+          {arcs.map((arc) => {
+            const to = lookup.get(arc.to_fips);
+            if (!to) return null;
+            const fromMeta = lookupStateByFips(arc.from_fips);
+            const toMeta = lookupStateByFips(arc.to_fips);
+            const left = (to.centroid[0] / VIEWBOX_W) * 100;
+            const top = (to.centroid[1] / VIEWBOX_H) * 100;
+            const give = arc.give ? compactAmount(arc.give.amount, arc.give.asset) : null;
+            return (
+              <div
+                key={`label-${arc.id}`}
+                style={{ left: `${left}%`, top: `${top}%` }}
+                className="absolute -translate-x-1/2 -translate-y-[140%] animate-fade-in-up"
+              >
+                <div className="rounded-md border border-[var(--color-emerald)]/50 bg-[var(--color-bg)]/85 backdrop-blur px-2 py-1 shadow-[0_2px_8px_-2px_rgba(0,0,0,0.6)]">
+                  <div className="flex items-center gap-1 font-mono text-[10px] font-bold tracking-[0.06em] text-[var(--color-fg)]">
+                    <span>{fromMeta?.abbr ?? `FIPS${arc.from_fips}`}</span>
+                    <span className="text-[var(--color-emerald)]">→</span>
+                    <span>{toMeta?.abbr ?? `FIPS${arc.to_fips}`}</span>
+                  </div>
+                  {give ? (
+                    <div className="font-mono text-[10px] tabular-nums text-[var(--color-emerald)]">
+                      {give}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

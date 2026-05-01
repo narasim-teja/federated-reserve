@@ -6,9 +6,9 @@ import {
   Brain,
   Coins,
   ExternalLink,
-  Gauge,
   Handshake,
   Landmark,
+  Radio,
   ScrollText,
   Sparkles,
   WalletCards,
@@ -16,6 +16,10 @@ import {
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
+import { CreditGauge } from '@/components/charts/credit-gauge';
+import { PeerSignals } from '@/components/charts/peer-signals';
+import { ReserveGauge } from '@/components/charts/reserve-gauge';
+import { TreasuryBar } from '@/components/charts/treasury-bar';
 import { NegotiationModal } from '@/components/dashboard/negotiation-modal';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -23,7 +27,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { StatusDot } from '@/components/ui/status-dot';
 import { useAgentDossier } from '@/hooks/use-agent-dossier';
-import { compactAddress, compactHash, formatRatio, formatTime, formatUsd, relativeTime } from '@/lib/format';
+import { compactAddress, compactHash, formatTime, relativeTime } from '@/lib/format';
 import { ALL_STATES, lookupStateByAbbr } from '@/lib/states';
 import type { AgentLogEntry, NegotiationView } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -105,27 +109,37 @@ export default function AgentDossierPage() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <Stat
-                    icon={<Gauge className="h-3.5 w-3.5" />}
-                    label="Reserve ratio"
-                    value={formatRatio(live?.reserve_ratio ?? null)}
-                  />
-                  <Stat
-                    icon={<Coins className="h-3.5 w-3.5" />}
-                    label="Treasury"
-                    value={formatUsd(live?.total_value_usd ?? null)}
-                  />
-                  <Stat
-                    icon={<Activity className="h-3.5 w-3.5" />}
-                    label="Tick"
-                    value={live?.tick_count == null ? '—' : `#${live.tick_count}`}
-                  />
-                  <Stat
-                    icon={<Sparkles className="h-3.5 w-3.5" />}
-                    label="Last seen"
-                    value={relativeTime(live?.last_seen_at ?? null)}
-                  />
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-[200px_minmax(0,1fr)]">
+                  <div className="flex items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-soft)]/40 px-3 py-3">
+                    <ReserveGauge ratio={live?.reserve_ratio ?? null} />
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    <div className="grid grid-cols-3 gap-2">
+                      <MicroStat
+                        icon={<Coins className="h-3 w-3" />}
+                        label="Treasury"
+                        value={
+                          live?.total_value_usd != null
+                            ? compactUsd(live.total_value_usd)
+                            : '—'
+                        }
+                      />
+                      <MicroStat
+                        icon={<Activity className="h-3 w-3" />}
+                        label="Tick"
+                        value={live?.tick_count == null ? '—' : `#${live.tick_count}`}
+                      />
+                      <MicroStat
+                        icon={<Sparkles className="h-3 w-3" />}
+                        label="Last seen"
+                        value={relativeTime(live?.last_seen_at ?? null)}
+                      />
+                    </div>
+                    <TreasuryBar
+                      composition={data?.memory?.composition ?? []}
+                      totalUsd={live?.total_value_usd ?? null}
+                    />
+                  </div>
                 </div>
 
                 {persona?.posture ? (
@@ -218,40 +232,6 @@ export default function AgentDossierPage() {
 
           {/* Right column — sidebars */}
           <div className="flex flex-col gap-4 min-w-0">
-            {/* Treasury composition */}
-            <Card>
-              <CardHeader>
-                <CardTitle>
-                  <Coins className="h-3.5 w-3.5 text-[var(--color-emerald)]" />
-                  Treasury composition
-                </CardTitle>
-                <Badge variant="muted" className="font-mono">
-                  {data?.memory?.composition?.length ?? 0} assets
-                </Badge>
-              </CardHeader>
-              <CardContent>
-                {data?.memory?.composition && data.memory.composition.length > 0 ? (
-                  <ul className="flex flex-col gap-1.5">
-                    {data.memory.composition.map((row) => (
-                      <li
-                        key={row.asset}
-                        className="flex items-center justify-between rounded-md bg-[var(--color-bg-soft)]/60 px-3 py-2 text-sm"
-                      >
-                        <span className="font-mono text-[var(--color-fg)]">{row.asset}</span>
-                        <span className="font-mono text-[var(--color-fg-muted)]">
-                          {row.balance}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-[12px] text-[var(--color-fg-subtle)]">
-                    Treasury not yet hydrated.
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-
             {/* Credit assessment */}
             <Card>
               <CardHeader>
@@ -259,36 +239,40 @@ export default function AgentDossierPage() {
                   <Landmark className="h-3.5 w-3.5 text-[var(--color-violet)]" />
                   Credit assessment
                 </CardTitle>
-                {credit ? (
-                  <Badge variant={creditTone(credit.rating)} className="font-mono">
-                    {credit.rating}
-                  </Badge>
-                ) : null}
               </CardHeader>
               <CardContent>
                 {credit ? (
-                  <div className="flex flex-col gap-2 text-[12px]">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[var(--color-fg-muted)]">Score</span>
-                      <span className="font-mono">{credit.score.toFixed(1)} / 100</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[var(--color-fg-muted)]">Yield floor</span>
-                      <span className="font-mono">{credit.yieldFloorBps} bps</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[var(--color-fg-muted)]">Yield ceiling</span>
-                      <span className="font-mono">{credit.yieldCeilingBps} bps</span>
-                    </div>
-                    <p className="text-[11px] leading-snug text-[var(--color-fg-muted)]">
-                      {credit.summary}
-                    </p>
-                  </div>
+                  <CreditGauge
+                    rating={credit.rating}
+                    score={credit.score}
+                    yieldFloorBps={credit.yieldFloorBps}
+                    yieldCeilingBps={credit.yieldCeilingBps}
+                    summary={credit.summary}
+                  />
                 ) : (
                   <p className="text-[12px] text-[var(--color-fg-subtle)]">
                     Awaiting reserve ratio + indicators…
                   </p>
                 )}
+              </CardContent>
+            </Card>
+
+            {/* Peer signals */}
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  <Radio className="h-3.5 w-3.5 text-[var(--color-cyan)]" />
+                  Peer signals
+                </CardTitle>
+                <Badge variant="muted" className="font-mono">
+                  {data?.memory?.receivedIndicators?.length ?? 0} received
+                </Badge>
+              </CardHeader>
+              <CardContent>
+                <PeerSignals
+                  indicators={data?.memory?.receivedIndicators ?? []}
+                  pivotFips={meta.fips}
+                />
               </CardContent>
             </Card>
 
@@ -423,18 +407,34 @@ function AgentPicker({
   );
 }
 
-function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function MicroStat({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+}) {
   return (
-    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-soft)]/60 px-3 py-2.5">
-      <span className="mb-1 inline-flex h-6 w-6 items-center justify-center rounded bg-[var(--color-cyan)]/15 text-[var(--color-cyan)]">
-        {icon}
-      </span>
-      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--color-fg-muted)]">
+    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-soft)]/40 px-2.5 py-2">
+      <div className="mb-0.5 flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--color-fg-subtle)]">
+        <span className="text-[var(--color-fg-muted)]">{icon}</span>
         {label}
       </div>
-      <div className="text-sm font-semibold tabular-nums truncate">{value}</div>
+      <div className="font-mono text-sm font-semibold tabular-nums truncate text-[var(--color-fg)]">
+        {value}
+      </div>
     </div>
   );
+}
+
+function compactUsd(n: number): string {
+  if (!Number.isFinite(n)) return '—';
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(2)}B`;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}k`;
+  return `$${n.toFixed(0)}`;
 }
 
 const KIND_TONE: Record<string, 'cyan' | 'violet' | 'emerald' | 'amber' | 'red' | 'muted'> = {

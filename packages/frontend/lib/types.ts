@@ -192,6 +192,14 @@ export interface AgentDossier {
     reserveRatio?: number;
     totalValueUsd?: number;
     tickCount?: number;
+    receivedIndicators?: Array<{
+      state_fips: number;
+      indicator: string;
+      value: number;
+      timestamp?: string;
+      source?: string;
+      receivedAt?: string;
+    }>;
   } | null;
   credit: {
     rating: string;
