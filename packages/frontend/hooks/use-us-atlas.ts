@@ -14,6 +14,8 @@ export interface UsAtlasFeature {
   name: string;
   d: string;
   centroid: [number, number];
+  /** Tight bounding box in atlas coords [[minX, minY], [maxX, maxY]]. */
+  bbox: [[number, number], [number, number]];
 }
 
 export interface UsAtlas {
@@ -47,12 +49,17 @@ async function loadAtlas(): Promise<UsAtlas> {
     const states: UsAtlasFeature[] = statesGeo.features.map((f) => {
       const d = path(f as never) ?? '';
       const c = path.centroid(f as never);
+      const b = path.bounds(f as never);
       return {
         id: String(f.id),
         fips: Number(f.id),
         name: f.properties.name,
         d,
         centroid: [c[0], c[1]],
+        bbox: [
+          [b[0][0], b[0][1]],
+          [b[1][0], b[1][1]],
+        ],
       };
     });
     return {

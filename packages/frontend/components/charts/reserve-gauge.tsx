@@ -37,8 +37,9 @@ function arcPath(startAngle: number, endAngle: number): string {
   const start = point(startAngle);
   const end = point(endAngle);
   const largeArc = Math.abs(startAngle - endAngle) > 180 ? 1 : 0;
-  // sweep flag = 0 because we go counter-clockwise in SVG terms (y is inverted)
-  return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} A ${RADIUS} ${RADIUS} 0 ${largeArc} 0 ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
+  // sweep flag = 1 → clockwise in SVG screen coords (y is down), which means
+  // arcs from leftmost (180°) to rightmost (0°) traverse through the top.
+  return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} A ${RADIUS} ${RADIUS} 0 ${largeArc} 1 ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
 }
 
 export function ReserveGauge({

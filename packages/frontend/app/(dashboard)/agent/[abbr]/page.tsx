@@ -19,6 +19,7 @@ import { useMemo, useState } from 'react';
 import { CreditGauge } from '@/components/charts/credit-gauge';
 import { PeerSignals } from '@/components/charts/peer-signals';
 import { ReserveGauge } from '@/components/charts/reserve-gauge';
+import { StateSilhouette } from '@/components/charts/state-silhouette';
 import { TreasuryBar } from '@/components/charts/treasury-bar';
 import { NegotiationModal } from '@/components/dashboard/negotiation-modal';
 import { Badge } from '@/components/ui/badge';
@@ -77,23 +78,33 @@ export default function AgentDossierPage() {
         <div className="mx-auto grid max-w-[1400px] grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           {/* Left column — primary identity + activity */}
           <div className="flex flex-col gap-4 min-w-0">
-            <Card>
-              <CardContent className="flex flex-col gap-4">
+            <Card className="relative overflow-hidden">
+              <StateSilhouette abbr={meta.abbr} health={health} variant="watermark" />
+              <CardContent className="relative flex flex-col gap-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <StatusDot health={health} size={9} />
-                      <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
-                        {tier} agent · {meta.region}
-                      </span>
+                  <div className="flex items-start gap-4">
+                    <StateSilhouette
+                      abbr={meta.abbr}
+                      health={health}
+                      variant="avatar"
+                      size={88}
+                      className="hidden sm:flex"
+                    />
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <StatusDot health={health} size={9} />
+                        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
+                          {tier} agent · {meta.region}
+                        </span>
+                      </div>
+                      <h1 className="mt-1 text-3xl font-semibold leading-tight">
+                        {meta.name} <span className="text-[var(--color-fg-subtle)]">·</span>{' '}
+                        <span className="font-mono text-[var(--color-cyan)]">{meta.abbr}</span>
+                      </h1>
+                      <p className="mt-1 max-w-2xl text-[13px] text-[var(--color-fg-muted)]">
+                        {persona?.tagline ?? 'Persona hydrating from observer…'}
+                      </p>
                     </div>
-                    <h1 className="mt-1 text-3xl font-semibold leading-tight">
-                      {meta.name} <span className="text-[var(--color-fg-subtle)]">·</span>{' '}
-                      <span className="font-mono text-[var(--color-cyan)]">{meta.abbr}</span>
-                    </h1>
-                    <p className="mt-1 max-w-2xl text-[13px] text-[var(--color-fg-muted)]">
-                      {persona?.tagline ?? 'Persona hydrating from observer…'}
-                    </p>
                   </div>
                   <div className="flex flex-col items-end gap-1">
                     {credit ? (
