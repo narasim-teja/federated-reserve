@@ -1111,17 +1111,18 @@ scripts/test-phase3-bond.sh   (bond auction primary issuance)
 message exchange. FEEDBACK.md updated with 6 Phase 3 entries
 (delights + bugs). Commit `phase-3-settlement`.
 
-### Phase 4 — Federation Scale-up (Day 4) — ✅ COMPLETE 2026-04-29
+### Phase 4 — Federation Scale-up (Day 4) — ✅ COMPLETE 2026-04-29; audited/fixed 2026-04-30
 
 **Purpose:** Make it look and feel like a real federation, not a 5-node toy.
 
 **Outcome:** 10-process mesh (8 deep states + FED + TRS) with:
 - 8 StateTokens + 8 USDC×StateToken V3 pools onchain (Phase 3 + IL/WA/AK backfill)
-- Multi-bidder bond auction (BondAuctionRegistry parks N bids, evaluates by lowest yield with credit-rating-derived floor/ceiling, settles winner mint, rejects others)
+- Multi-bidder bond auction (BondAuctionRegistry parks N bids, asks the reasoner to choose among credit-eligible bids, settles winner mint, rejects others; lowest-yield eligible selection is fallback only)
 - Algorithmic credit rating (deterministic function over reserve ratio + unemployment + per-capita income + persona penalty → AAA..D rating + yield floor/ceiling)
 - Onchain aid settlement (responder fires `USDC.transfer(requester, amount)` on `offered`)
-- Federal mechanics: FED broadcasts `announce_fed_rate` every Nth tick (configurable); TRS exposes `issue_federal_transfer` MCP tool that fires USDC.transfer from the Treasury wallet (Treasury-only, gated by amount cap)
-- Phase 4 gate test ✅ 4/4 PASS — multi-bidder, aid settlement, shock response, fed rate broadcast
+- Federal mechanics: FED broadcasts `announce_fed_rate` every Nth tick (configurable); TRS exposes model-gated `issue_federal_transfer` MCP tool that fires `USDC.transfer` from the Treasury wallet (Treasury-only, hard amount cap remains a safety guardrail)
+- Real NOAA shock loop from data plane → FED tick sweep → A2A fan-out, with completion checked against the returned A2A task status before logging injection success
+- Phase 4 gate test ✅ PASS — multi-bidder, aid settlement, leaf-to-leaf shock response, FED-originated shock schema, coalition lifecycle, fed rate broadcast, Treasury settlement, NOAA loop
 
 > **Picked up from Phase 3:** the 3 deep states deferred from Phase 3
 > (IL/WA/AK) need their StateToken contracts deployed, V3 pools
@@ -1141,9 +1142,12 @@ message exchange. FEEDBACK.md updated with 6 Phase 3 entries
   announcements in `state.receivedFedRates`.
 - [x] Treasury agent — `tier: 'federal'`, FIPS 101, registers
   `issue_federal_transfer` MCP tool. Only TRS approves+executes; all
-  other agents respond with `not authorized`. Approval gated at
-  `< $10M` cap; uses the same `SwapExecutor.payIssuer` helper that
-  bond and aid settlement use.
+  other agents respond with `not authorized`. Approval is reasoner-gated
+  when OpenRouter is available, with a hard safety cap of `< $10M`;
+  uses the same `SwapExecutor.payIssuer` helper that bond and aid
+  settlement use. The audited implementation maps TRS to
+  `WALLET_TREASURY_PRIVATE_KEY` / `WALLET_TREASURY_ADDRESS`, matching
+  `.env.local` rather than expecting a separate `WALLET_TRS_*` keypair.
 - [x] Algorithmic credit rating — pure function in
   [`packages/shared/src/credit-rating.ts`](../packages/shared/src/credit-rating.ts)
   scoring each state 0-100 over reserve ratio (60pts), unemployment
@@ -1157,10 +1161,14 @@ message exchange. FEEDBACK.md updated with 6 Phase 3 entries
   the first bid the registry starts a `windowMs` timer (default 8s);
   bids arriving within the window pile up; on timer or
   `maxBidsForEval`, the registry calls the executor's evaluator,
-  picks the lowest-yield eligible bid (between floor+ceiling), fires
-  the winner's `BondToken.mint` via the SwapExecutor, then resolves
-  every parked task's promise with its own `BondAward` (winner gets
-  mint metadata; losers get a clear rationale).
+  filters by credit-rating floor+ceiling, then asks the state reasoner
+  to award among eligible bids. If the reasoner is unavailable or
+  returns an invalid choice, the deterministic fallback picks the
+  lowest-yield eligible bid. The winner's `BondToken.mint` is fired via
+  the SwapExecutor, then every parked task's promise resolves with its
+  own `BondAward` (winner gets mint metadata; losers get a clear
+  rationale). This keeps the auction agentic while preserving hard
+  credit guardrails.
 - [x] **Multi-turn coalition formation flow** — A2A lifecycle
   `Working → InputRequired (counter_terms) → revised_invite → Working
   → Completed (joined|declined)`. Schemas in [`packages/shared/src/a2a-types.ts`](../packages/shared/src/a2a-types.ts)
@@ -1189,8 +1197,11 @@ message exchange. FEEDBACK.md updated with 6 Phase 3 entries
   `GET /shocks` and `GET /shocks/state/:fips`. The FED agent's tick
   loop sweeps every `SHOCK_SWEEP_EVERY_N` ticks, picks unique active
   shocks, resolves affected-state pubkeys, and fan-outs
-  `coordinate-shock-response` A2A to each — driving real
-  decentralized shock-response negotiation from a real-world feed.
+  `coordinate-shock-response` A2A to each. The post-audit path counts
+  only completed A2A tasks that include a structured contribution; failed
+  or malformed responses are recorded separately in memory log details.
+  This drives real decentralized shock-response negotiation from a
+  real-world feed without overstating injection success.
   `BLS_API_KEY`/`BEA_API_KEY`/`CENSUS_API_KEY` round out the
   state-snapshot side: BLS LAUS for monthly employment count + labor
   force, BEA SAGDP9N for quarterly real GDP + YoY growth derivation,
@@ -1209,8 +1220,16 @@ message exchange. FEEDBACK.md updated with 6 Phase 3 entries
   workaround — both because the AXL `applyOverrides` bug is fixed
   (see "Onchain artifacts" + FEEDBACK Phase 4 section) and because
   leaf→leaf is the architectural promise.
+- [x] **Federal schema + Treasury settlement regression tests** —
+  synthetic federal agents use FIPS 100/101, so
+  [`packages/shared/src/mcp-schemas.ts`](../packages/shared/src/mcp-schemas.ts)
+  accepts those values explicitly. Phase 4 gate test 3a sends a FED
+  shock signal to IL and verifies it completes through the A2A schema.
+  Phase 4 gate test 4b calls TRS `issue_federal_transfer` over MCP via
+  AXL and verifies both the returned transaction hash and the onchain
+  MA/Treasury USDC balance deltas.
 
-#### Phase 4 gate — ✅ 7/7 PASS (post-AXL fix)
+#### Phase 4 gate — ✅ PASS (post-audit, post-AXL fix)
 
 [`scripts/test-phase4-gate.sh`](../scripts/test-phase4-gate.sh):
 
@@ -1222,14 +1241,18 @@ message exchange. FEEDBACK.md updated with 6 Phase 3 entries
 ✓ aid offered with on-chain transfer tx=0xce0fdba1…
 ✓ aid settlement verified: MA→CA 500,000,000 USDC base units
 ✓ shock-leaf-leaf: FL responded joining (commitment $0); leaf→leaf routing PROVEN
+✓ fed-shock-schema: IL accepted FED-originated A2A shock
 ✓ coalition-mt: NY single-shot joined (multi-turn lifecycle wired; counter path
                   available, this run took the direct branch)
 ✓ federal rate broadcast received by at least one peer (16 broadcasts seen)
+✓ treasury-transfer: TRS issued 1 USDC to MA via MCP with verified balance deltas
 ✓ NOAA loop: FED logged noaa_shock_inject after sweep (data plane → FED → A2A)
 ```
 
-The gate now drives a **true leaf→leaf shock signal** (CA → FL) rather
-than the Phase 4 initial-cut leaf→hub workaround.
+The gate now drives a **true leaf→leaf shock signal** (CA → FL), a
+**federal-originated shock signal** (FED → IL), and a **Treasury MCP
+settlement** (TRS → MA) rather than relying on the Phase 4 initial-cut
+leaf→hub workaround or schema-only federal checks.
 
 #### Known issue resolved (was the "leaf→leaf misroute")
 
@@ -1257,25 +1280,60 @@ mechanics, 8 onchain StateTokens + pools, multi-bidder bond auction
 working with credit-rating-driven yield evaluation, aid settlement
 on-chain, shock response structured. Commit `phase-4-federation-scaleup`.
 
-### Phase 5 — Frontend + iNFTs (Day 5)
+### Phase 5 — Frontend + iNFTs (Day 5) — 🚧 WATCHABLE SLICE COMPLETE 2026-05-01
 
 **Purpose:** Make it watchable. iNFT track deliverable.
 
-- [ ] `packages/observer` — Bun/Hono service that runs an AXL node and an MCP server exposing `share_economic_indicator` (so agents fan out indicators to it like any other peer), aggregates mesh state in-memory, serves WebSocket to frontend
-- [ ] `packages/frontend` — Next.js 15 app, shadcn/ui components, Tailwind
-  - US map component (deck.gl + MapLibre, state polygons from Census TIGER GeoJSON)
+- [x] `packages/observer` — Bun/Hono service that runs beside an AXL node
+  and MCP router. It registers the same `treasurer` service name as agents
+  and implements `share_economic_indicator`, `announce_fed_rate`,
+  `share_topology`, and read-only `query_treasury`; aggregates mesh state
+  in-memory; serves `GET /healthz`, `GET /snapshot`, `GET /events`,
+  `GET /infts`, and `WS /ws`.
+- [x] `packages/frontend` — Next.js 15 App Router dashboard. First screen is
+  the operational dashboard, not a landing page. The live observer stream is
+  primary; a truthful pending-data fallback keeps the watchable UI visible
+  when the observer is not reachable from the browser sandbox.
+  - US state health map panel (Phase 5 watchable slice uses a responsive
+    state mosaic; deck.gl + TIGER polygons remain a polish upgrade)
   - Live state colorization based on treasury health
-  - Capital flow arc layer (animated on swap execution events)
+  - Capital flow arc layer (animated on swap execution events) — deferred to
+    polish after observer event ingestion expands beyond MCP broadcasts
   - Left rail: live AXL message feed (color-coded by event type)
-  - Right rail: news feed + agent-vs-actual scorecard
+  - Right rail: iNFT manifest panel; news feed + agent-vs-actual scorecard
+    deferred
   - Bottom: focused state detail panel (treasury composition, decision log, swap history)
   - Top bar: sim clock, total mesh TVL, swaps/hr, mesh msg/s
-  - iNFT panel: minted iNFTs with explorer links
-- [ ] `scripts/mint-inft.ts` — for each deep state-agent: package its current Storage URI, encrypt metadata, mint ERC-7857 token on 0G Chain testnet, record token IDs
+  - iNFT panel: pending iNFT manifest entries now; minted token IDs +
+    explorer links after `scripts/mint-inft.ts`
+- [x] `scripts/build-inft-manifest.ts` — for each deep state-agent, packages
+  current persona, wallet owner, deployment metadata, `memory/<state>/state.json`,
+  and recent `log.jsonl` into `.data/inft-manifest.json` with
+  `mint_status: "pending_0g"` and a deterministic metadata hash.
+- [ ] `scripts/mint-inft.ts` — real 0G Storage encryption + ERC-7857 minting.
+  Deferred deliberately; the frontend does not fake token IDs.
 - [ ] iNFT contract deployed on 0G Chain, addresses recorded
 - [ ] Each minted iNFT verified on 0G explorer with metadata pointer
 
-**Deliverable:** Live dashboard URL, 8 iNFTs minted with explorer links, frontend shows the full mesh. Commit `phase-5-frontend-inft`.
+#### Phase 5 gate — ✅ PASS
+
+[`scripts/test-phase5-gate.sh`](../scripts/test-phase5-gate.sh):
+
+```
+✓ observer health endpoint reachable
+✓ observer registered treasurer MCP service
+✓ observer AXL pubkey resolved
+✓ MA topology sees observer peer
+✓ MA → observer share_economic_indicator over AXL/MCP returned 200
+✓ observer snapshot recorded Phase 5 indicator
+✓ observer WebSocket emits initial mesh_snapshot
+✓ iNFT manifest has all 8 deep-state entries
+```
+
+**Deliverable:** Local live dashboard URL, observer mesh peer, and 8-entry
+iNFT manifest are complete. Real 0G mint/explorer links remain the next
+Phase 5 subtask before calling the full iNFT deliverable complete. Commit
+`phase-5-frontend-inft`.
 
 ### Phase 6 — Production Deploy + Polish (Day 6)
 

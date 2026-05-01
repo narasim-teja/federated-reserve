@@ -14,6 +14,7 @@
 #   FED (FIPS100): AXL :9082 listen :9081 | router :9083 | mcp :7180 | a2a :9084
 #   TRS (FIPS101): AXL :9092 listen :9091 | router :9093 | mcp :7190 | a2a :9094
 #   data-plane (single shared sidecar):     :3002
+#   observer (optional): AXL :9102 listen :9101 | router :9103 | mcp :7200 | http/ws :3001
 #
 # All AXL nodes share `tcp_port: 7000` per the Phase 0 finding (gVisor TCP is
 # virtual per-process, and AXL's send dialer uses *its own* tcp_port as the
@@ -26,6 +27,7 @@
 #
 # Env knobs:
 #   MESH_AGENTS=3 | 5 | 10        # 3 (Phase 1), 5 (Phase 2-3), 10 full (Phase 4)
+#   INCLUDE_OBSERVER=1            # add Phase 5 observer mesh peer + dashboard gateway
 #   SKIP_DATA_PLANE=1             # don't boot the data plane sidecar
 #   TICK_INTERVAL_MS=30000        # passed through to each agent process
 #   FED_RATE_BROADCAST_EVERY_N=4  # how often FED announces a new rate
@@ -52,6 +54,8 @@ if [[ -f "$ROOT/.env.local" ]]; then
 fi
 
 DATA_PLANE_PORT="${DATA_PLANE_PORT:-3002}"
+OBSERVER_PORT="${OBSERVER_PORT:-3001}"
+INCLUDE_OBSERVER="${INCLUDE_OBSERVER:-0}"
 
 cmd="${1:-run}"
 
@@ -86,7 +90,7 @@ ALL_PORTS=(
   9003 9013 9023 9033 9043 9053 9063 9073 9083 9093
   7100 7110 7120 7130 7140 7150 7160 7170 7180 7190
   9004 9014 9024 9034 9044 9054 9064 9074 9084 9094
-  "$DATA_PLANE_PORT"
+  9101 9102 9103 9104 7200 "$OBSERVER_PORT" "$DATA_PLANE_PORT"
 )
 
 cleanup() {
@@ -134,6 +138,10 @@ for entry in "${AGENTS[@]}"; do
     openssl genpkey -algorithm ed25519 -out "$KEY_DIR/$key" >/dev/null 2>&1
   fi
 done
+if [[ "$INCLUDE_OBSERVER" == "1" && ! -f "$KEY_DIR/node-observer.pem" ]]; then
+  echo "[mesh] generating $KEY_DIR/node-observer.pem"
+  openssl genpkey -algorithm ed25519 -out "$KEY_DIR/node-observer.pem" >/dev/null 2>&1
+fi
 
 trap cleanup EXIT
 
@@ -230,6 +238,67 @@ for entry in "${AGENTS[@]}"; do
   echo $! >> "$PID_FILE"
 done
 
+# ---------- Step 3.5: Phase 5 observer peer --------------------------------
+if [[ "$INCLUDE_OBSERVER" == "1" ]]; then
+  echo "[mesh] starting observer AXL node on api :9102"
+  ( cd "$CONFIG_DIR" && "$NODE_BIN" -config node-observer.json ) > "$LOG_DIR/axl-observer.log" 2>&1 &
+  echo $! >> "$PID_FILE"
+  for i in {1..15}; do
+    if curl -fsS "http://127.0.0.1:9102/topology" > /dev/null 2>&1; then
+      echo "  - observer AXL ready"
+      break
+    fi
+    if [[ $i -eq 15 ]]; then
+      echo "  - observer AXL FAILED to come up"
+      tail -30 "$LOG_DIR/axl-observer.log"
+      exit 1
+    fi
+    sleep 0.5
+  done
+
+  echo "[mesh] starting MCP router for observer on :9103"
+  ( source "$ROOT/.venv/bin/activate" && python -m mcp_routing.mcp_router --port 9103 ) > "$LOG_DIR/router-observer.log" 2>&1 &
+  echo $! >> "$PID_FILE"
+  for i in {1..15}; do
+    if curl -fsS "http://127.0.0.1:9103/health" > /dev/null 2>&1; then
+      echo "  - observer router ready"
+      break
+    fi
+    if [[ $i -eq 15 ]]; then
+      echo "  - observer router FAILED"
+      tail -30 "$LOG_DIR/router-observer.log"
+      exit 1
+    fi
+    sleep 0.5
+  done
+
+  echo "[mesh] starting observer service on :$OBSERVER_PORT"
+  (
+    cd "$ROOT/packages/observer" && \
+    OBSERVER_PORT="$OBSERVER_PORT" \
+    AXL_API_URL="http://127.0.0.1:9102" \
+    MCP_ROUTER_URL="http://127.0.0.1:9103" \
+    MCP_SERVER_PORT="7200" \
+    DATA_PLANE_URL="http://127.0.0.1:$DATA_PLANE_PORT" \
+    MEMORY_ROOT="$ROOT/memory" \
+    INFT_MANIFEST_PATH="$ROOT/.data/inft-manifest.json" \
+    bun run src/index.ts
+  ) > "$LOG_DIR/observer.log" 2>&1 &
+  echo $! >> "$PID_FILE"
+  for i in {1..30}; do
+    if curl -fsS "http://127.0.0.1:$OBSERVER_PORT/healthz" > /dev/null 2>&1; then
+      echo "  - observer service ready"
+      break
+    fi
+    if [[ $i -eq 30 ]]; then
+      echo "  - observer service FAILED"
+      tail -60 "$LOG_DIR/observer.log"
+      exit 1
+    fi
+    sleep 0.5
+  done
+fi
+
 # Wait for all agents to register.
 for entry in "${AGENTS[@]}"; do
   read -r name _fips _api _listen router _mcp _a2a _key _cfg <<<"$entry"
@@ -246,6 +315,20 @@ for entry in "${AGENTS[@]}"; do
     sleep 0.5
   done
 done
+if [[ "$INCLUDE_OBSERVER" == "1" ]]; then
+  for i in {1..30}; do
+    if curl -fsS "http://127.0.0.1:9103/services" 2>/dev/null | grep -q treasurer; then
+      echo "  - observer registered with router :9103"
+      break
+    fi
+    if [[ $i -eq 30 ]]; then
+      echo "  - observer FAILED to register"
+      tail -40 "$LOG_DIR/observer.log"
+      exit 1
+    fi
+    sleep 0.5
+  done
+fi
 
 # Allow gVisor TCP to settle so the first /send between peers doesn't drop.
 echo "[mesh] waiting 6s for gVisor TCP settle..."
@@ -255,6 +338,9 @@ echo ""
 echo "[mesh] ✓ ready"
 echo "[mesh]    logs:  $LOG_DIR/{axl,router,agent}-*.log"
 echo "[mesh]    stop:  $0 stop"
+if [[ "$INCLUDE_OBSERVER" == "1" ]]; then
+  echo "[mesh]    observer: http://127.0.0.1:$OBSERVER_PORT"
+fi
 echo "[mesh]    pubkeys:"
 for entry in "${AGENTS[@]}"; do
   read -r name _fips api _listen _router _mcp _a2a _key _cfg <<<"$entry"
