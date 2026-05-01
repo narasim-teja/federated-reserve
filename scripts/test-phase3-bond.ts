@@ -22,7 +22,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Address, createPublicClient, http, parseAbi } from 'viem';
+import { http, type Address, createPublicClient, parseAbi } from 'viem';
 import { SwapExecutor } from '../packages/agent/src/execute.ts';
 import {
   type ContractDeployments,
@@ -104,13 +104,20 @@ async function bal(token: Address, who: Address): Promise<bigint> {
     args: [who],
   })) as bigint;
 }
-async function balAfterChange(token: Address, who: Address, baseline: bigint, label: string): Promise<bigint> {
+async function balAfterChange(
+  token: Address,
+  who: Address,
+  baseline: bigint,
+  label: string,
+): Promise<bigint> {
   for (let i = 0; i < 12; i++) {
     const v = await bal(token, who);
     if (v !== baseline) return v;
     await Bun.sleep(1000);
   }
-  console.warn(`[bond-gate] balance for ${label} never moved off ${baseline} (12s) — using last read`);
+  console.warn(
+    `[bond-gate] balance for ${label} never moved off ${baseline} (12s) — using last read`,
+  );
   return baseline;
 }
 
@@ -127,7 +134,8 @@ interface AxlA2aResponse {
 function findDataPayload(res: AxlA2aResponse): Record<string, unknown> | undefined {
   const msgParts = res.result?.status?.message?.parts ?? [];
   for (const p of msgParts) if (p.kind === 'data' && p.data) return p.data;
-  for (const a of res.result?.artifacts ?? []) for (const p of a.parts ?? []) if (p.kind === 'data' && p.data) return p.data;
+  for (const a of res.result?.artifacts ?? [])
+    for (const p of a.parts ?? []) if (p.kind === 'data' && p.data) return p.data;
   return undefined;
 }
 async function sendA2a(fromApi: string, toPubkey: string, body: unknown): Promise<AxlA2aResponse> {
@@ -168,7 +176,10 @@ ok('mesh reachable, both pubkeys resolved');
 
 // 2. snapshot
 const before = {
-  ca: { usdc: await bal(usdc.address as Address, CA_ADDR), bond: await bal(bond.address as Address, CA_ADDR) },
+  ca: {
+    usdc: await bal(usdc.address as Address, CA_ADDR),
+    bond: await bal(bond.address as Address, CA_ADDR),
+  },
   ma: { usdc: await bal(usdc.address as Address, MA_ADDR) },
 };
 console.log(
@@ -223,7 +234,10 @@ if (award?.kind !== 'awarded') fail('round 1', `expected awarded, got ${award?.k
 if (!award.mint_tx_hash || !award.mint_tx_hash.startsWith('0x')) {
   fail('mint settlement', `bad mint_tx_hash=${award.mint_tx_hash}`);
 }
-if (!award.bond_token_address || award.bond_token_address.toLowerCase() !== bond.address.toLowerCase()) {
+if (
+  !award.bond_token_address ||
+  award.bond_token_address.toLowerCase() !== bond.address.toLowerCase()
+) {
   fail('mint settlement', `bond address mismatch: ${award.bond_token_address}`);
 }
 console.log(
@@ -245,7 +259,12 @@ console.log('[bond-gate] confirming on-chain balance deltas');
 const after = {
   ca: {
     usdc: await balAfterChange(usdc.address as Address, CA_ADDR, before.ca.usdc, 'CA.USDC'),
-    bond: await balAfterChange(bond.address as Address, CA_ADDR, before.ca.bond, `CA.${bond.symbol}`),
+    bond: await balAfterChange(
+      bond.address as Address,
+      CA_ADDR,
+      before.ca.bond,
+      `CA.${bond.symbol}`,
+    ),
   },
   ma: {
     usdc: await balAfterChange(usdc.address as Address, MA_ADDR, before.ma.usdc, 'MA.USDC'),
@@ -263,5 +282,7 @@ ok('settled: CA holds bond face value, MA received principal in USDC');
 
 console.log('');
 console.log('[bond-gate] ✓ PASS');
-console.log(`         issuer mint:  https://unichain-sepolia.blockscout.com/tx/${award.mint_tx_hash}`);
+console.log(
+  `         issuer mint:  https://unichain-sepolia.blockscout.com/tx/${award.mint_tx_hash}`,
+);
 console.log(`         bidder pay:   https://unichain-sepolia.blockscout.com/tx/${pay.txHash}`);

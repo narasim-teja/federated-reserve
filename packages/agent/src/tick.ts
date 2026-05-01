@@ -211,6 +211,7 @@ async function sweepNoaaShocksAndFanOut(
   }
 
   const injected: string[] = [];
+  const failed: string[] = [];
   for (const [fips, event] of byFips) {
     const state = lookupStateByFips(fips);
     if (!state) continue;
@@ -251,10 +252,26 @@ async function sweepNoaaShocksAndFanOut(
       },
     };
     try {
-      await axl.callRemoteA2a(targetPub, body);
+      const response = (await axl.callRemoteA2a(targetPub, body)) as {
+        result?: {
+          status?: {
+            state?: string;
+            message?: { parts?: Array<{ kind?: string; data?: { kind?: string } }> };
+          };
+        };
+      };
+      const statusState = response.result?.status?.state;
+      const contribution = response.result?.status?.message?.parts?.find(
+        (part) => part.kind === 'data',
+      )?.data;
+      if (statusState !== 'completed' || !contribution?.kind) {
+        failed.push(`${state.abbr}/${event.event_type}:state=${statusState ?? 'unknown'}`);
+        continue;
+      }
       injected.push(`${state.abbr}/${event.event_type}@sev${event.severity}`);
       recently.add(event.event_id);
     } catch (err) {
+      failed.push(`${state.abbr}/${event.event_type}`);
       console.warn(`[FED] shock fan-out FAILED for ${state.abbr}: ${(err as Error).message}`);
     }
   }
@@ -268,13 +285,13 @@ async function sweepNoaaShocksAndFanOut(
     }
   }
   console.log(
-    `[FED] shock injection tick ${tickNo}: ${injected.length}/${byFips.size} affected states notified — ${injected.join(', ')}`,
+    `[FED] shock injection tick ${tickNo}: ${injected.length}/${byFips.size} affected states notified — ${injected.join(', ')}${failed.length ? `; failed=${failed.join(', ')}` : ''}`,
   );
   await memory.appendLog({
     kind: 'broadcast_sent',
     at: new Date().toISOString(),
     summary: `noaa_shock_inject: ${injected.length} states (${injected.join(', ')})`,
-    details: { tick: tickNo, source: 'NOAA', injected },
+    details: { tick: tickNo, source: 'NOAA', injected, failed },
   });
 }
 
@@ -286,15 +303,12 @@ async function sweepNoaaShocksAndFanOut(
  */
 const _agentCardCache = new Map<string, { abbr: string | null; ts: number }>();
 
-async function resolvePeerPubkeyByAbbr(
-  deps: TickDeps,
-  abbr: string,
-): Promise<string | null> {
+async function resolvePeerPubkeyByAbbr(deps: TickDeps, abbr: string): Promise<string | null> {
   const { axl, discovery } = deps;
   const peers = discovery.knownPeers();
   for (const peer of peers) {
     const cached = _agentCardCache.get(peer);
-    if (cached && cached.abbr) {
+    if (cached?.abbr) {
       if (cached.abbr === abbr) return peer;
       continue;
     }
@@ -304,18 +318,27 @@ async function resolvePeerPubkeyByAbbr(
       const name = (card?.name ?? '').toLowerCase();
       // Names look like "Massachusetts State Treasurer" — extract a hint by
       // checking against known state names. Cheap: keep it simple.
-      const stateMatch =
-        name.includes('massachusetts') ? 'MA' :
-        name.includes('california') ? 'CA' :
-        name.includes('texas') ? 'TX' :
-        name.includes('new york') ? 'NY' :
-        name.includes('florida') ? 'FL' :
-        name.includes('illinois') ? 'IL' :
-        name.includes('washington') ? 'WA' :
-        name.includes('alaska') ? 'AK' :
-        name.includes('federal reserve') ? 'FED' :
-        name.includes('treasury') ? 'TRS' :
-        null;
+      const stateMatch = name.includes('massachusetts')
+        ? 'MA'
+        : name.includes('california')
+          ? 'CA'
+          : name.includes('texas')
+            ? 'TX'
+            : name.includes('new york')
+              ? 'NY'
+              : name.includes('florida')
+                ? 'FL'
+                : name.includes('illinois')
+                  ? 'IL'
+                  : name.includes('washington')
+                    ? 'WA'
+                    : name.includes('alaska')
+                      ? 'AK'
+                      : name.includes('federal reserve')
+                        ? 'FED'
+                        : name.includes('treasury')
+                          ? 'TRS'
+                          : null;
       _agentCardCache.set(peer, { abbr: stateMatch, ts: Date.now() });
       if (stateMatch === abbr) return peer;
     } catch {

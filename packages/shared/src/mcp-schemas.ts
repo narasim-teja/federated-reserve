@@ -11,9 +11,10 @@
 
 import { z } from 'zod';
 
-// FIPS code shape — codes are not contiguous (gaps at 3, 7, 14, 43, 52, etc.)
-// so we validate against the canonical set in `states.ts` at runtime.
-export const fipsSchema = z.number().int().min(1).max(78);
+// FIPS-like agent identity shape. Real states top out at PR=72, and Phase 4
+// adds synthetic FED/TRS identities at 100/101. Codes are validated against
+// the canonical set in `states.ts` where semantics matter.
+export const fipsSchema = z.number().int().min(1).max(101);
 
 // ---------- query_treasury ---------------------------------------------------
 

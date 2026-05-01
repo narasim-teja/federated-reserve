@@ -27,11 +27,11 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  http,
   type Address,
   type Hex,
   createPublicClient,
   createWalletClient,
-  http,
   parseAbi,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -100,7 +100,13 @@ interface StateSpec {
 
 const PHASE4_STATES: StateSpec[] = [
   { abbr: 'IL', fips: 17, name: 'Illinois', symbol: 'ILT', fullName: 'Illinois Treasury Token' },
-  { abbr: 'WA', fips: 53, name: 'Washington', symbol: 'WAT', fullName: 'Washington Treasury Token' },
+  {
+    abbr: 'WA',
+    fips: 53,
+    name: 'Washington',
+    symbol: 'WAT',
+    fullName: 'Washington Treasury Token',
+  },
   { abbr: 'AK', fips: 2, name: 'Alaska', symbol: 'AKT', fullName: 'Alaska Treasury Token' },
 ];
 
@@ -242,13 +248,10 @@ for (const s of PHASE4_STATES) {
     console.log(`[p4-deploy]   ${s.abbr} agent already has ${bal} — skip transfer`);
     continue;
   }
-  await send(
-    `${s.abbr}.transfer(agent, 1.9M)`,
-    t.address,
-    stTokenAbi,
-    'transfer',
-    [t.agent, STATE_TOKEN_TO_AGENT],
-  );
+  await send(`${s.abbr}.transfer(agent, 1.9M)`, t.address, stTokenAbi, 'transfer', [
+    t.agent,
+    STATE_TOKEN_TO_AGENT,
+  ]);
 }
 
 // Step 3 — mint USDC: agents (1M each) + deployer LP reserve (300k) + Treasury (5M).
@@ -270,7 +273,8 @@ async function ensureUsdcBalance(label: string, who: Address, target: bigint): P
 
 for (const s of PHASE4_STATES) {
   const t = deployments.contracts.StateTokens[s.abbr];
-  await ensureUsdcBalance(`${s.abbr} agent`, t!.agent, USDC_PER_AGENT);
+  if (!t) throw new Error(`missing StateToken deployment for ${s.abbr}`);
+  await ensureUsdcBalance(`${s.abbr} agent`, t.agent, USDC_PER_AGENT);
 }
 // Deployer LP reserve for 3 new pools.
 const lpUsdcNeed = USDC_LP_PER_POOL * 3n;

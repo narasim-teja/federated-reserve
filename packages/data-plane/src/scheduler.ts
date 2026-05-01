@@ -68,9 +68,10 @@ export class RefreshScheduler {
       const stateSnapshots = new Map<number, StateSnapshot>();
 
       // 1) FRED
-      if (this.keyOk(this.cfg.keys.fred)) {
+      const fredKey = this.cfg.keys.fred;
+      if (this.keyOk(fredKey)) {
         try {
-          const { snapshots, errors } = await fetchAllFred({ apiKey: this.cfg.keys.fred! });
+          const { snapshots, errors } = await fetchAllFred({ apiKey: fredKey });
           for (const s of snapshots) stateSnapshots.set(s.state_fips, s);
           if (errors.length > 0) {
             this.recordSourceError(
@@ -86,9 +87,10 @@ export class RefreshScheduler {
       }
 
       // 2) BLS LAUS
-      if (this.keyOk(this.cfg.keys.bls)) {
+      const blsKey = this.cfg.keys.bls;
+      if (this.keyOk(blsKey)) {
         try {
-          const bls = await fetchBlsLaus({ apiKey: this.cfg.keys.bls! });
+          const bls = await fetchBlsLaus({ apiKey: blsKey });
           mergeIntoStateSnapshots(stateSnapshots, bls.perStateIndicators);
           if (bls.errors.length > 0) {
             this.recordSourceError(
@@ -104,9 +106,10 @@ export class RefreshScheduler {
       }
 
       // 3) BEA Regional
-      if (this.keyOk(this.cfg.keys.bea)) {
+      const beaKey = this.cfg.keys.bea;
+      if (this.keyOk(beaKey)) {
         try {
-          const bea = await fetchBeaRegional({ apiKey: this.cfg.keys.bea! });
+          const bea = await fetchBeaRegional({ apiKey: beaKey });
           mergeIntoStateSnapshots(stateSnapshots, bea.perStateIndicators);
           if (bea.errors.length > 0) {
             this.recordSourceError(
@@ -122,9 +125,10 @@ export class RefreshScheduler {
       }
 
       // 4) Census ACS 5-year
-      if (this.keyOk(this.cfg.keys.census)) {
+      const censusKey = this.cfg.keys.census;
+      if (this.keyOk(censusKey)) {
         try {
-          const census = await fetchCensusAcs({ apiKey: this.cfg.keys.census! });
+          const census = await fetchCensusAcs({ apiKey: censusKey });
           mergeIntoStateSnapshots(stateSnapshots, census.perStateIndicators);
           if (census.errors.length > 0) {
             this.recordSourceError(
@@ -146,8 +150,11 @@ export class RefreshScheduler {
         const populated = snapList.filter((s) => Object.keys(s.indicators).length > 0).length;
         const sample = snapList.find((s) => Object.keys(s.indicators).length > 2);
         console.log(
-          `[scheduler] state snapshots merged — ${populated}/${snapList.length} states with ≥1 indicator` +
-            (sample ? ` (e.g. ${sample.state_abbr}: ${Object.keys(sample.indicators).join(',')})` : ''),
+          `[scheduler] state snapshots merged — ${populated}/${snapList.length} states with ≥1 indicator${
+            sample
+              ? ` (e.g. ${sample.state_abbr}: ${Object.keys(sample.indicators).join(',')})`
+              : ''
+          }`,
         );
       }
 
@@ -227,7 +234,7 @@ export class RefreshScheduler {
     this.failuresLastHour.push({ at: Date.now(), error: `${name}:${err}` });
   }
 
-  private keyOk(key: string | undefined): boolean {
+  private keyOk(key: string | undefined): key is string {
     return Boolean(key && !key.startsWith('PLACEHOLDER') && key.length > 4);
   }
 }

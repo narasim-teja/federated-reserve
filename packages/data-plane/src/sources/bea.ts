@@ -159,7 +159,7 @@ function periodToIso(period: string): string | null {
 }
 
 function fipsToGeoFips(fips: number): string {
-  return String(fips).padStart(2, '0') + '000';
+  return `${String(fips).padStart(2, '0')}000`;
 }
 
 function geoFipsToFips(geo: string): number | null {

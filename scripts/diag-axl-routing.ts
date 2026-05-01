@@ -91,7 +91,13 @@ for (const p of PAIRS) {
   }
 }
 
-const expectedHits: Array<{ from: string; to: string; expected: string; saw: string; ok: boolean }> = [];
+const expectedHits: Array<{
+  from: string;
+  to: string;
+  expected: string;
+  saw: string;
+  ok: boolean;
+}> = [];
 const fails: string[] = [];
 
 console.log('\n[diag] cross-dialing AgentCard fetches');
@@ -110,9 +116,7 @@ for (const from of PAIRS) {
       card.name && card.name === `${STATE_NAMES.MA} State Treasurer` && to.name !== 'MA'
         ? ' (MISROUTED TO MA)'
         : '';
-    console.log(
-      `  ${tag} ${from.name} → ${to.name.padEnd(2)}  saw "${got}"${indicator}`,
-    );
+    console.log(`  ${tag} ${from.name} → ${to.name.padEnd(2)}  saw "${got}"${indicator}`);
     if (!ok) fails.push(`${from.name}→${to.name}: expected "${expectedName}", got "${got}"`);
   }
 }

@@ -110,7 +110,7 @@ export async function fetchCensusAcs(opts: {
         throw new Error(`Census non-JSON: ${text.slice(0, 200)}`);
       }
       if (!Array.isArray(rows) || rows.length < 2) {
-        throw new Error(`Census empty result`);
+        throw new Error('Census empty result');
       }
       const header = rows[0];
       if (!header) throw new Error('Census missing header row');

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Phase 1 test 3: A2A multi-turn negotiate-bilateral-swap lifecycle.
 #
-# CA (initiator) opens a bilateral swap with MA (responder). MA is configured
-# to deterministically counter once (5% haircut) then accept. We drive the
-# lifecycle:
+# CA (initiator) opens a bilateral swap with MA (responder). Phase 1 used a
+# deterministic 5% counter; Phase 2+ is OpenRouter-driven, so this test checks
+# the lifecycle shape and a parseable counter without hard-coding the amount.
 #
 #   round 1: CA sends `proposal`         → MA returns Task(input-required)
 #                                           with a `counter` Message
@@ -97,9 +97,8 @@ if [[ "$COUNTER_KIND" != "counter" ]]; then
   echo "[test-a2a] ✗ expected status.message DataPart kind=counter, got $COUNTER_KIND"
   exit 1
 fi
-# 5% haircut on 500_000_000_000 should be 475_000_000_000 (or thereabouts).
-if [[ "$COUNTER_GIVE_AMT" != "475000000000" ]]; then
-  echo "[test-a2a] ✗ expected counter.give.amount=475000000000, got $COUNTER_GIVE_AMT"
+if ! [[ "$COUNTER_GIVE_AMT" =~ ^[0-9]+$ ]] || [[ "$COUNTER_GIVE_AMT" == "0" ]]; then
+  echo "[test-a2a] ✗ expected positive numeric counter.give.amount, got $COUNTER_GIVE_AMT"
   exit 1
 fi
 

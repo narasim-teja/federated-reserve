@@ -13,7 +13,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Address, type Hex, createPublicClient, createWalletClient, http } from 'viem';
+import { http, type Address, type Hex, createPublicClient, createWalletClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 const REPO_ROOT = join(import.meta.dir, '..');
@@ -118,7 +118,9 @@ const deployments = JSON.parse(readFileSync(DEPLOYMENTS_PATH, 'utf8')) as {
 };
 
 if (deployments.bonds?.[SPEC.bondId]) {
-  console.log(`[bond-deploy] ${SPEC.bondId} already deployed at ${deployments.bonds[SPEC.bondId].address} — skip`);
+  console.log(
+    `[bond-deploy] ${SPEC.bondId} already deployed at ${deployments.bonds[SPEC.bondId].address} — skip`,
+  );
   process.exit(0);
 }
 

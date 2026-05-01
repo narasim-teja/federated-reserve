@@ -44,15 +44,15 @@ import {
   resolveAsset,
   skillEnvelopeSchema,
 } from '@federated-reserve/shared';
-import type { DataPlaneClient } from '../data-plane-client.ts';
 import type { AgentConfig } from '../config.ts';
+import type { DataPlaneClient } from '../data-plane-client.ts';
 import type { SwapExecutor } from '../execute.ts';
 import type { Reasoner } from '../reason.ts';
 import type { AgentState } from '../state.ts';
 import {
   type BondAuctionEvaluation,
-  type BondMintSettler,
   BondAuctionRegistry,
+  type BondMintSettler,
 } from './bond-auction-registry.ts';
 
 const MAX_NEGOTIATION_ROUNDS = 3;
@@ -86,8 +86,6 @@ function formatIndicatorValue(kind: EconomicIndicatorKind, value: number): strin
     case 'personal_income_total':
       // BEA reports in $M (chained or current).
       return `$${(value / 1000).toFixed(1)}B`;
-    case 'tax_revenue':
-    case 'reserve_ratio':
     default:
       return value.toString();
   }
@@ -167,7 +165,10 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
             await this.handleCoalitionInvite(
               ctx,
               bus,
-              env as Extract<typeof env, { initiator_fips: number; topic: string; proposed_contribution_usd: number }>,
+              env as Extract<
+                typeof env,
+                { initiator_fips: number; topic: string; proposed_contribution_usd: number }
+              >,
             );
           }
           return;
@@ -603,8 +604,7 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     const prompt = [
       'Skill: participate-in-coalition. A peer is inviting you to join a coalition.',
       `Coalition tag: ${args.coalition_tag}. Topic: "${args.topic}".`,
-      `Proposed contribution: $${args.proposed_contribution_usd}` +
-        (args.duration_days ? ` over ${args.duration_days} days.` : '.'),
+      `Proposed contribution: $${args.proposed_contribution_usd}${args.duration_days ? ` over ${args.duration_days} days.` : '.'}`,
       `Your coalition affinities: [${persona.coalitions.join(', ')}].`,
       this.treasuryContextLine(),
       `Your indicators: ${this.recentIndicatorsSummary()}`,
@@ -766,7 +766,36 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       return b.bid.principal_usd - a.bid.principal_usd;
     });
 
-    const winner = eligible[0]?.bid ?? null;
+    let winner = eligible[0]?.bid ?? null;
+    let winnerRationale: string | null = null;
+    if (eligible.length > 0 && this.reasoner && this.cfg.reasoningEnabled) {
+      try {
+        const modelDecision = await this.askBondAuctionReasoner({
+          bondId,
+          credit,
+          eligible: eligible.map((x) => x.bid),
+          ineligible: ineligible.map((x) => ({
+            bid: x.bid,
+            reason: x.reason,
+          })),
+        });
+        if (modelDecision.award === false) {
+          winner = null;
+          winnerRationale = modelDecision.rationale;
+        } else {
+          const modelWinner = eligible.find((x) => x.bid.bidder_fips === modelDecision.winner_fips);
+          if (modelWinner) {
+            winner = modelWinner.bid;
+            winnerRationale = modelDecision.rationale;
+          }
+        }
+      } catch (err) {
+        console.warn(
+          `[${this.cfg.state.abbr}] bond-auction reasoner failed (${String(err)}); using deterministic credit fallback`,
+        );
+      }
+    }
+
     const perBidder: BondAuctionEvaluation['perBidder'] = bids.map((b) => {
       const ineligibleEntry = ineligible.find((x) => x.bid.bidder_fips === b.bidder_fips);
       if (ineligibleEntry) {
@@ -786,7 +815,9 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
           bidderFips: b.bidder_fips,
           kind: 'awarded' as const,
           yieldBps: b.bid_yield_bps,
-          rationale: `${this.cfg.state.abbr} awards ${bondId} at ${b.bid_yield_bps}bps (lowest of ${eligible.length} eligible bid${eligible.length === 1 ? '' : 's'}). Rating ${credit.rating}, score ${credit.score.toFixed(1)}.`,
+          rationale:
+            winnerRationale ??
+            `${this.cfg.state.abbr} awards ${bondId} at ${b.bid_yield_bps}bps (lowest of ${eligible.length} eligible bid${eligible.length === 1 ? '' : 's'}). Rating ${credit.rating}, score ${credit.score.toFixed(1)}.`,
         };
       }
       return {
@@ -795,11 +826,45 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
         yieldBps: b.bid_yield_bps,
         rationale: winner
           ? `${this.cfg.state.abbr} rejects FIPS ${b.bidder_fips}: outbid by FIPS ${winner.bidder_fips} at ${winner.bid_yield_bps}bps.`
-          : `${this.cfg.state.abbr} rejects FIPS ${b.bidder_fips}: no eligible bids in window.`,
+          : `${this.cfg.state.abbr} rejects FIPS ${b.bidder_fips}: ${winnerRationale ?? 'no eligible bids awarded in window.'}`,
       };
     });
 
     return { winnerFips: winner?.bidder_fips ?? null, perBidder };
+  }
+
+  private async askBondAuctionReasoner(args: {
+    bondId: string;
+    credit: CreditAssessment;
+    eligible: ReadonlyArray<BondBid>;
+    ineligible: ReadonlyArray<{ bid: BondBid; reason: 'below-floor' | 'above-ceiling' }>;
+  }): Promise<{ award: boolean; winner_fips: number | null; rationale: string }> {
+    if (!this.reasoner) throw new Error('reasoner not configured');
+    const prompt = [
+      'Skill: bond-auction. You are the issuer deciding which bid to award.',
+      `Bond id: ${args.bondId}. Issuer: ${this.cfg.state.abbr} (FIPS ${this.cfg.state.fips}).`,
+      `Credit assessment: ${args.credit.summary}`,
+      `Eligible bids already inside the credit floor/ceiling: ${JSON.stringify(args.eligible)}`,
+      `Rejected-by-guardrail bids: ${JSON.stringify(args.ineligible)}`,
+      this.treasuryContextLine(),
+      `Latest indicators: ${this.recentIndicatorsSummary()}`,
+      this.fedRateContextLine(),
+      'Choose the bid that best protects issuer financing cost and execution confidence. Lowest eligible yield should usually win unless there is a clear reason not to award.',
+      'Respond ONLY with JSON: { "award": true | false, "winner_fips": <number|null>, "rationale": "<one short sentence>" }.',
+      'If award=true, winner_fips MUST be one of the eligible bidder_fips values. If no eligible bid should win, set award=false and winner_fips=null.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const result = await this.reasoner.reasonJson<{
+      award: boolean;
+      winner_fips: number | null;
+      rationale: string;
+    }>({
+      tier: this.cfg.state.tier,
+      system: this.systemPrompt,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    return result.value;
   }
 
   /**
@@ -880,10 +945,12 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
    */
   private async executeBondMint(
     env: Extract<import('@federated-reserve/shared').SkillEnvelope, { skill: 'bond-auction' }>,
-  ): Promise<
-    | { bondAddress: string; principalUsdcBase: bigint; txHash: string; blockNumber: bigint }
-    | null
-  > {
+  ): Promise<{
+    bondAddress: string;
+    principalUsdcBase: bigint;
+    txHash: string;
+    blockNumber: bigint;
+  } | null> {
     if (!this.swapExecutor || !this.cfg.settlement.enabled) {
       console.warn(
         `[${this.cfg.state.abbr}] bond mint skip: swapExecutor=${!!this.swapExecutor} settlement.enabled=${this.cfg.settlement.enabled}`,
@@ -912,7 +979,9 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     }
     const bidder = lookupStateByFips(env.bidder_fips);
     if (!bidder) {
-      console.warn(`[${this.cfg.state.abbr}] bond mint skip: unknown bidder FIPS ${env.bidder_fips}`);
+      console.warn(
+        `[${this.cfg.state.abbr}] bond mint skip: unknown bidder FIPS ${env.bidder_fips}`,
+      );
       return null;
     }
     const bidderAddrEnv = process.env[`WALLET_${bidder.abbr}_ADDRESS`];
@@ -1054,10 +1123,7 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
   private async executeAidTransfer(
     requesterFips: number,
     amountUsd: number,
-  ): Promise<
-    | { txHash: string; blockNumber: bigint; amount: bigint; recipient: string }
-    | null
-  > {
+  ): Promise<{ txHash: string; blockNumber: bigint; amount: bigint; recipient: string } | null> {
     if (!this.swapExecutor || !this.cfg.settlement.enabled) {
       console.warn(
         `[${this.cfg.state.abbr}] aid settlement skip: swapExecutor=${!!this.swapExecutor} enabled=${this.cfg.settlement.enabled}`,
@@ -1066,7 +1132,9 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     }
     const requester = lookupStateByFips(requesterFips);
     if (!requester) {
-      console.warn(`[${this.cfg.state.abbr}] aid settlement skip: unknown requester FIPS ${requesterFips}`);
+      console.warn(
+        `[${this.cfg.state.abbr}] aid settlement skip: unknown requester FIPS ${requesterFips}`,
+      );
       return null;
     }
     const requesterAddrEnv = process.env[`WALLET_${requester.abbr}_ADDRESS`];
@@ -1250,7 +1318,9 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     const parts: string[] = [];
     for (const [k, v] of Object.entries(own)) {
       if (v) {
-        parts.push(`${k as EconomicIndicatorKind}=${formatIndicatorValue(k as EconomicIndicatorKind, v.value)} (${v.observation_date} ${v.source})`);
+        parts.push(
+          `${k as EconomicIndicatorKind}=${formatIndicatorValue(k as EconomicIndicatorKind, v.value)} (${v.observation_date} ${v.source})`,
+        );
       }
     }
     return parts.length ? parts.join('; ') : '(empty snapshot)';
@@ -1296,7 +1366,8 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     const lines = events
       .slice(0, 5)
       .map(
-        (e) => `${e.state_abbr}/${e.event_type}@severity${e.severity} (${e.begin_date.slice(0, 10)})`,
+        (e) =>
+          `${e.state_abbr}/${e.event_type}@severity${e.severity} (${e.begin_date.slice(0, 10)})`,
       );
     return `Active NOAA shocks: ${lines.join('; ')}`;
   }
@@ -1453,9 +1524,7 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
         swap_request_id: result.swapRequestId,
       };
     } catch (err) {
-      console.warn(
-        `[${this.cfg.state.abbr}]   responder swap FAILED: ${(err as Error).message}`,
-      );
+      console.warn(`[${this.cfg.state.abbr}]   responder swap FAILED: ${(err as Error).message}`);
       return null;
     }
   }

@@ -34,7 +34,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Address, createPublicClient, http, parseAbi } from 'viem';
+import { http, type Address, createPublicClient, parseAbi } from 'viem';
 import {
   type ContractDeployments,
   getBond,
@@ -79,7 +79,16 @@ const API: Record<string, string> = {
 };
 
 const FIPS: Record<string, number> = {
-  MA: 25, CA: 6, TX: 48, NY: 36, FL: 12, IL: 17, WA: 53, AK: 2, FED: 100, TRS: 101,
+  MA: 25,
+  CA: 6,
+  TX: 48,
+  NY: 36,
+  FL: 12,
+  IL: 17,
+  WA: 53,
+  AK: 2,
+  FED: 100,
+  TRS: 101,
 };
 
 let failed = 0;
@@ -139,7 +148,7 @@ interface AxlA2aResponse {
     id?: string;
     status?: {
       state?: string;
-      message?: { parts?: Array<{ kind: string; data?: Record<string, unknown> }> };
+      message?: { parts?: Array<{ kind: string; data?: Record<string, unknown>; text?: string }> };
     };
     artifacts?: Array<{ parts?: Array<{ kind: string; data?: Record<string, unknown> }> }>;
   };
@@ -165,6 +174,32 @@ async function sendA2a(fromApi: string, toPubkey: string, body: unknown): Promis
   throw new Error(`A2A send to ${toPubkey} never returned 200`);
 }
 
+async function callMcp(
+  fromApi: string,
+  toPubkey: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`${fromApi}/mcp/${toPubkey}/treasurer`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: randomUUID(),
+      method: 'tools/call',
+      params: { name: toolName, arguments: args },
+    }),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`MCP ${toolName} HTTP ${res.status}: ${text.slice(0, 240)}`);
+  const outer = JSON.parse(text) as {
+    result?: { content?: Array<{ type?: string; text?: string }> };
+  };
+  const inner = outer.result?.content?.[0]?.text;
+  if (!inner) throw new Error(`MCP ${toolName} missing content text: ${text.slice(0, 240)}`);
+  return JSON.parse(inner) as Record<string, unknown>;
+}
+
 // ---------- main ----------
 
 console.log('[p4-gate] starting Phase 4 gate test');
@@ -182,16 +217,26 @@ console.log(
 );
 
 const pubkeys: Record<string, string> = {};
-for (const name of ['MA', 'CA', 'NY', 'FL', 'TX', 'AK']) {
-  const api = API[name]!;
+for (const name of ['MA', 'CA', 'NY', 'FL', 'IL', 'TX', 'AK', 'FED', 'TRS']) {
+  const api = API[name];
+  if (!api) throw new Error(`missing API URL for ${name}`);
   pubkeys[name] = await getPubkey(api);
 }
 ok('mesh reachable, pubkeys resolved');
+const maPubkey = pubkeys.MA;
+const nyPubkey = pubkeys.NY;
+const flPubkey = pubkeys.FL;
+const ilPubkey = pubkeys.IL;
+const trsPubkey = pubkeys.TRS;
+if (!maPubkey || !nyPubkey || !flPubkey || !ilPubkey || !trsPubkey) {
+  throw new Error('missing required pubkey after mesh resolution');
+}
 
 const maAddr = process.env.WALLET_MA_ADDRESS as Address;
 const caAddr = process.env.WALLET_CA_ADDRESS as Address;
 const nyAddr = process.env.WALLET_NY_ADDRESS as Address;
 const flAddr = process.env.WALLET_FL_ADDRESS as Address;
+const treasuryAddr = process.env.WALLET_TREASURY_ADDRESS as Address;
 
 // ============================================================
 // Test 1 — Multi-bidder bond auction (MA issuer)
@@ -255,8 +300,9 @@ console.log('[p4-gate]   sending 3 parallel bids');
 const t0 = Date.now();
 const results = await Promise.all(
   bidPlan.map(async (b) => {
-    const fromApi = API[b.bidder]!;
-    const r = await sendA2a(fromApi, pubkeys.MA!, buildBidPayload(b.bidder, b.yieldBps, b.principal));
+    const fromApi = API[b.bidder];
+    if (!fromApi) throw new Error(`missing API URL for ${b.bidder}`);
+    const r = await sendA2a(fromApi, maPubkey, buildBidPayload(b.bidder, b.yieldBps, b.principal));
     return { bidder: b.bidder, yieldBps: b.yieldBps, response: r };
   }),
 );
@@ -283,14 +329,15 @@ for (const d of decisions) {
 
 const winners = decisions.filter((d) => d.award?.kind === 'awarded');
 const losers = decisions.filter((d) => d.award?.kind === 'rejected');
+const winner = winners[0];
 if (winners.length !== 1) {
   fail('multi-bidder', `expected exactly 1 awarded, got ${winners.length}`);
-} else if (winners[0]!.bidder !== 'CA') {
-  fail('multi-bidder', `expected CA to win (lowest yield among eligible), got ${winners[0]!.bidder}`);
-} else if (!winners[0]!.award?.mint_tx_hash) {
-  fail('multi-bidder', `winner has no mint_tx_hash`);
+} else if (winner?.bidder !== 'CA') {
+  fail('multi-bidder', `expected CA to win (lowest yield among eligible), got ${winner?.bidder}`);
+} else if (!winner.award?.mint_tx_hash) {
+  fail('multi-bidder', 'winner has no mint_tx_hash');
 } else {
-  ok(`multi-bidder: CA won at 600bps with mint_tx=${winners[0]!.award.mint_tx_hash}`);
+  ok(`multi-bidder: CA won at 600bps with mint_tx=${winner.award.mint_tx_hash}`);
 }
 if (losers.length !== 2) {
   fail('multi-bidder', `expected 2 rejected, got ${losers.length}`);
@@ -302,13 +349,13 @@ if (losers.length !== 2) {
   } else if (!flLoser.award?.rationale?.toLowerCase().includes('ceiling')) {
     fail('multi-bidder', `FL rejection should mention ceiling: ${flLoser.award?.rationale}`);
   } else {
-    ok(`multi-bidder: NY rejected (outbid), FL rejected (above ceiling)`);
+    ok('multi-bidder: NY rejected (outbid), FL rejected (above ceiling)');
   }
 }
 
 // On-chain mint verification
-if (winners.length === 1 && winners[0]!.award?.mint_tx_hash) {
-  const expected = BigInt(winners[0]!.award.principal_usdc_base ?? bond.principalUsdcBase);
+if (winner?.award?.mint_tx_hash) {
+  const expected = BigInt(winner.award.principal_usdc_base ?? bond.principalUsdcBase);
   const after = await balAfterChange(bond.address as Address, caAddr, before.caBond, 'CA.bond');
   const delta = after - before.caBond;
   if (delta !== expected) {
@@ -351,7 +398,7 @@ const aidPayload = {
     },
   },
 };
-const aidRes = await sendA2a(API.CA!, pubkeys.MA!, aidPayload);
+const aidRes = await sendA2a(API.CA, maPubkey, aidPayload);
 const aidData = findDataPayload(aidRes) as
   | undefined
   | {
@@ -392,8 +439,6 @@ if (aidData?.kind !== 'offered') {
 // Test 3 — Coordinated shock response over true LEAF→LEAF
 // ============================================================
 console.log('\n[p4-gate] Test 3: shock response — CA → FL (leaf→leaf)');
-// Resolve FL pubkey if not already done (it is, but explicit for clarity)
-const flPubkey = pubkeys.FL!;
 const shockPayloadCaToFl = {
   jsonrpc: '2.0',
   id: randomUUID(),
@@ -412,26 +457,93 @@ const shockPayloadCaToFl = {
             shock_kind: 'natural_disaster',
             affected_fips: [FIPS.FL],
             severity: 7,
-            proposed_action: 'Joint $200k aid pool over 60 days for FL hurricane response; gulf-pool members commit pro-rata.',
+            proposed_action:
+              'Joint $200k aid pool over 60 days for FL hurricane response; gulf-pool members commit pro-rata.',
           },
         },
       ],
     },
   },
 };
-const shockRes = await sendA2a(API.CA!, flPubkey, shockPayloadCaToFl);
+const shockRes = await sendA2a(API.CA, flPubkey, shockPayloadCaToFl);
 const shockData = findDataPayload(shockRes) as
   | undefined
-  | { skill?: string; kind?: string; responder_fips?: number; commitment_usd?: number; rationale?: string };
+  | {
+      skill?: string;
+      kind?: string;
+      responder_fips?: number;
+      commitment_usd?: number;
+      rationale?: string;
+    };
 console.log(
   `[p4-gate]   leaf→leaf shock: responder_fips=${shockData?.responder_fips} kind=${shockData?.kind} commitment=$${shockData?.commitment_usd} (${(shockData?.rationale ?? '').slice(0, 120)}…)`,
 );
 if (!shockData || (shockData.kind !== 'joining' && shockData.kind !== 'abstaining')) {
   fail('shock-leaf-leaf', `expected joining|abstaining from FL, got ${shockData?.kind}`);
 } else if (shockData.responder_fips !== FIPS.FL) {
-  fail('shock-leaf-leaf', `expected responder_fips=${FIPS.FL} (FL), got ${shockData.responder_fips} — AXL leaf→leaf routing broken?`);
+  fail(
+    'shock-leaf-leaf',
+    `expected responder_fips=${FIPS.FL} (FL), got ${shockData.responder_fips} — AXL leaf→leaf routing broken?`,
+  );
 } else {
-  ok(`shock-leaf-leaf: FL responded ${shockData.kind} (commitment $${shockData.commitment_usd}); leaf→leaf routing PROVEN`);
+  ok(
+    `shock-leaf-leaf: FL responded ${shockData.kind} (commitment $${shockData.commitment_usd}); leaf→leaf routing PROVEN`,
+  );
+}
+
+// FED-originated shocks use synthetic FIPS 100. This catches schema regressions
+// where state-only FIPS validation rejects federal initiators.
+console.log('\n[p4-gate] Test 3a: FED → IL shock signal accepts federal FIPS');
+const fedShockPayload = {
+  jsonrpc: '2.0',
+  id: randomUUID(),
+  method: 'message/send',
+  params: {
+    message: {
+      kind: 'message',
+      role: 'user',
+      messageId: randomUUID(),
+      parts: [
+        {
+          kind: 'data',
+          data: {
+            skill: 'coordinate-shock-response',
+            initiator_fips: FIPS.FED,
+            shock_kind: 'natural_disaster',
+            affected_fips: [FIPS.IL],
+            severity: 8,
+            proposed_action:
+              'FED requests Illinois reserve posture update after NOAA flood warning; commit only if prudent.',
+          },
+        },
+      ],
+    },
+  },
+};
+const fedShockRes = await sendA2a(API.FED, ilPubkey, fedShockPayload);
+const fedShockData = findDataPayload(fedShockRes) as
+  | undefined
+  | { kind?: string; responder_fips?: number; commitment_usd?: number; rationale?: string };
+const fedShockText = fedShockRes.result?.status?.message?.parts?.find(
+  (p) => p.kind === 'text',
+)?.text;
+if (fedShockRes.result?.status?.state !== 'completed') {
+  fail(
+    'fed-shock-schema',
+    `expected completed, got ${fedShockRes.result?.status?.state}: ${fedShockText ?? ''}`,
+  );
+} else if (
+  !fedShockData ||
+  (fedShockData.kind !== 'joining' && fedShockData.kind !== 'abstaining')
+) {
+  fail('fed-shock-schema', `expected joining|abstaining from IL, got ${fedShockData?.kind}`);
+} else if (fedShockData.responder_fips !== FIPS.IL) {
+  fail(
+    'fed-shock-schema',
+    `expected responder_fips=${FIPS.IL}, got ${fedShockData.responder_fips}`,
+  );
+} else {
+  ok(`fed-shock-schema: IL accepted FED-originated A2A shock (${fedShockData.kind})`);
 }
 
 // ============================================================
@@ -463,7 +575,7 @@ const initialInvitePayload = {
     },
   },
 };
-const r1 = await sendA2a(API.CA!, pubkeys.NY!, initialInvitePayload);
+const r1 = await sendA2a(API.CA, nyPubkey, initialInvitePayload);
 const r1Data = findDataPayload(r1) as
   | undefined
   | {
@@ -506,8 +618,7 @@ if (!taskId) {
                 initiator_fips: FIPS.CA,
                 coalition_tag: 'climate-exposed',
                 topic: 'Pacific-Atlantic climate-resilience reserve pool Q3-2026',
-                proposed_contribution_usd:
-                  r1Data.preferred_contribution_usd ?? 2_500_000,
+                proposed_contribution_usd: r1Data.preferred_contribution_usd ?? 2_500_000,
                 duration_days: r1Data.preferred_duration_days ?? 180,
               },
             },
@@ -515,7 +626,7 @@ if (!taskId) {
         },
       },
     };
-    const r2 = await sendA2a(API.CA!, pubkeys.NY!, revisedPayload);
+    const r2 = await sendA2a(API.CA, nyPubkey, revisedPayload);
     const r2Data = findDataPayload(r2) as
       | undefined
       | { kind?: string; contribution_usd?: number; rationale?: string };
@@ -575,6 +686,53 @@ if (!receivedAtLeastOne) {
 }
 
 // ============================================================
+// Test 4b — Treasury MCP transfer
+// ============================================================
+console.log('\n[p4-gate] Test 4b: Treasury issue_federal_transfer MCP settlement');
+const maBeforeTreasury = await bal(usdc.address as Address, maAddr);
+const treasuryBefore = await bal(usdc.address as Address, treasuryAddr);
+const transfer = await callMcp(API.MA, trsPubkey, 'issue_federal_transfer', {
+  recipient_fips: FIPS.MA,
+  amount_usd: 1,
+  reason: 'Phase 4 gate: tiny operational transfer to verify Treasury wallet settlement.',
+});
+console.log(
+  `[p4-gate]   treasury transfer approved=${transfer.approved} tx=${transfer.tx_hash} rationale=${String(transfer.rationale).slice(0, 140)}`,
+);
+if (
+  transfer.approved !== true ||
+  typeof transfer.tx_hash !== 'string' ||
+  !transfer.tx_hash.startsWith('0x')
+) {
+  fail(
+    'treasury-transfer',
+    `expected approved transfer with tx hash, got ${JSON.stringify(transfer)}`,
+  );
+} else {
+  const maAfterTreasury = await balAfterChange(
+    usdc.address as Address,
+    maAddr,
+    maBeforeTreasury,
+    'MA.USDC treasury',
+  );
+  const treasuryAfter = await balAfterChange(
+    usdc.address as Address,
+    treasuryAddr,
+    treasuryBefore,
+    'TRS.USDC',
+  );
+  const dMaTreasury = maAfterTreasury - maBeforeTreasury;
+  const dTreasury = treasuryAfter - treasuryBefore;
+  if (dMaTreasury !== 1_000_000n) {
+    fail('treasury-transfer', `MA USDC delta ${dMaTreasury} != expected +1000000`);
+  } else if (dTreasury !== -1_000_000n) {
+    fail('treasury-transfer', `Treasury USDC delta ${dTreasury} != expected -1000000`);
+  } else {
+    ok(`treasury-transfer: TRS→MA 1000000 USDC base units tx=${transfer.tx_hash}`);
+  }
+}
+
+// ============================================================
 // Test 5 — NOAA shock loop (data plane → FED → A2A fan-out)
 // ============================================================
 console.log('\n[p4-gate] Test 5: NOAA shock loop');
@@ -621,10 +779,10 @@ if (noaaCount === 0) {
     await Bun.sleep(2000);
   }
   if (injected) {
-    ok(`NOAA loop: FED logged noaa_shock_inject after sweep (data plane → FED → A2A)`);
+    ok('NOAA loop: FED logged noaa_shock_inject after sweep (data plane → FED → A2A)');
   } else {
     console.warn(
-      `[p4-gate]   ⚠ FED has not recorded a noaa_shock_inject entry yet (90s window).\n` +
+      '[p4-gate]   ⚠ FED has not recorded a noaa_shock_inject entry yet (90s window).\n' +
         '             This may be timing — increase test budget or set SHOCK_SWEEP_EVERY_N=1.',
     );
     ok('NOAA loop: data plane reachable; FED sweep window not yet hit');

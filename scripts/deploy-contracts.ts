@@ -20,11 +20,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
+  http,
   type Address,
   type Hex,
   createPublicClient,
   createWalletClient,
-  http,
   parseAbi,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -72,7 +72,11 @@ const unichainSepolia = {
 
 const deployer = privateKeyToAccount(DEPLOYER_PK);
 const publicClient = createPublicClient({ chain: unichainSepolia, transport: http(RPC) });
-const wallet = createWalletClient({ account: deployer, chain: unichainSepolia, transport: http(RPC) });
+const wallet = createWalletClient({
+  account: deployer,
+  chain: unichainSepolia,
+  transport: http(RPC),
+});
 
 console.log(`[deploy] chain=${CHAIN_ID}  rpc=${RPC}`);
 console.log(`[deploy] deployer=${deployer.address}`);
@@ -103,7 +107,13 @@ interface StateSpec {
 }
 
 const STATES: StateSpec[] = [
-  { abbr: 'MA', fips: 25, name: 'Massachusetts', symbol: 'MAT', fullName: 'Massachusetts Treasury Token' },
+  {
+    abbr: 'MA',
+    fips: 25,
+    name: 'Massachusetts',
+    symbol: 'MAT',
+    fullName: 'Massachusetts Treasury Token',
+  },
   { abbr: 'CA', fips: 6, name: 'California', symbol: 'CAT', fullName: 'California Treasury Token' },
   { abbr: 'TX', fips: 48, name: 'Texas', symbol: 'TXT', fullName: 'Texas Treasury Token' },
   { abbr: 'NY', fips: 36, name: 'New York', symbol: 'NYT', fullName: 'New York Treasury Token' },
@@ -207,13 +217,10 @@ console.log('[deploy] step 5: distribute StateTokens to state wallets');
 const stTokenAbi = parseAbi(['function transfer(address to, uint256 value) returns (bool)']);
 for (const s of STATES) {
   const t = stateTokens[s.abbr];
-  await send(
-    `${s.abbr}.transfer(agent, 1.9M)`,
-    t.address,
-    stTokenAbi,
-    'transfer',
-    [t.agent, STATE_TOKEN_TO_AGENT],
-  );
+  await send(`${s.abbr}.transfer(agent, 1.9M)`, t.address, stTokenAbi, 'transfer', [
+    t.agent,
+    STATE_TOKEN_TO_AGENT,
+  ]);
 }
 
 // ---------- persist addresses ------------------------------------------------

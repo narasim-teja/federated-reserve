@@ -5,7 +5,7 @@
  *   1. Read MA + CA pubkeys from their AXL nodes.
  *   2. Snapshot MA + CA balances of {USDC, MAT, CAT} on Unichain Sepolia.
  *   3. CA (initiator) sends `proposal` to MA via AXL `/a2a/{ma_key}`.
- *   4. MA (responder, via deterministic 5% haircut) returns `counter` and
+ *   4. MA (responder, OpenRouter-driven with deterministic fallback) returns `counter` and
  *      task transitions to `input-required`.
  *   5. CA sends `accept` with the countered terms.
  *   6. MA's executor:
@@ -25,7 +25,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Address, createPublicClient, http, parseAbi } from 'viem';
+import { http, type Address, createPublicClient, parseAbi } from 'viem';
 import { SwapExecutor } from '../packages/agent/src/execute.ts';
 import {
   type ContractDeployments,
@@ -67,7 +67,7 @@ if (!CA_PK) throw new Error('WALLET_CA_PRIVATE_KEY missing');
 // AND in each agent's USDC balance, but large enough that the Trading API
 // produces a real CLASSIC route with non-zero output.
 const TRADE_USDC = 100_000_000n; // 100 USDC base units
-const TRADE_STATE_TOKEN_NOMINAL = 100n * 10n ** 18n; // ~100 state-tokens nominal target
+const TRADE_STATE_TOKEN_NOMINAL = 50n * 10n ** 18n; // favorable 2 USDC/token pilot target
 
 // ---------- helpers ----------
 
@@ -148,11 +148,7 @@ function findDataPayload(res: AxlA2aResponse): Record<string, unknown> | undefin
   return undefined;
 }
 
-async function sendA2a(
-  fromApi: string,
-  toPubkey: string,
-  body: unknown,
-): Promise<AxlA2aResponse> {
+async function sendA2a(fromApi: string, toPubkey: string, body: unknown): Promise<AxlA2aResponse> {
   for (let attempt = 1; attempt <= 6; attempt++) {
     const res = await fetch(`${fromApi}/a2a/${toPubkey}`, {
       method: 'POST',
@@ -193,8 +189,16 @@ ok('mesh reachable, both pubkeys resolved');
 
 // 2. snapshot pre-trade balances
 const before = {
-  ma: { usdc: await bal(usdc.address as Address, MA_ADDR), mat: await bal(ma, MA_ADDR), cat: await bal(cat, MA_ADDR) },
-  ca: { usdc: await bal(usdc.address as Address, CA_ADDR), mat: await bal(ma, CA_ADDR), cat: await bal(cat, CA_ADDR) },
+  ma: {
+    usdc: await bal(usdc.address as Address, MA_ADDR),
+    mat: await bal(ma, MA_ADDR),
+    cat: await bal(cat, MA_ADDR),
+  },
+  ca: {
+    usdc: await bal(usdc.address as Address, CA_ADDR),
+    mat: await bal(ma, CA_ADDR),
+    cat: await bal(cat, CA_ADDR),
+  },
 };
 console.log(
   `[phase3] before: MA{USDC=${before.ma.usdc} MAT=${before.ma.mat} CAT=${before.ma.cat}} CA{USDC=${before.ca.usdc} CAT=${before.ca.cat} MAT=${before.ca.mat}}`,
@@ -218,7 +222,8 @@ const round1 = {
             initiator_fips: 6,
             give: { asset: 'USDC', amount: TRADE_USDC.toString() },
             receive: { asset: 'MAT', amount: TRADE_STATE_TOKEN_NOMINAL.toString() },
-            rationale: 'Phase 3 gate: CA acquires MA exposure (Northeast tech rebalance)',
+            rationale:
+              'Phase 3 gate: CA pays 100 USDC for a small pilot MA exposure; counter instead of rejecting if the terms need adjustment.',
           },
         },
       ],
@@ -234,7 +239,8 @@ console.log(
   `[phase3]   r1 state=${r1State} task=${taskId} counter.kind=${counterPayload?.kind} counter.give.amount=${(counterPayload as { give?: { amount?: string } } | undefined)?.give?.amount}`,
 );
 if (r1State !== 'input-required') fail('round 1', `expected input-required, got ${r1State}`);
-if (counterPayload?.kind !== 'counter') fail('round 1', `expected counter, got ${counterPayload?.kind}`);
+if (counterPayload?.kind !== 'counter')
+  fail('round 1', `expected counter, got ${counterPayload?.kind}`);
 const counterGiveAmount = (counterPayload as { give: { amount: string } }).give.amount;
 ok('round 1: input-required + counter received');
 
@@ -271,12 +277,24 @@ const settlement = findDataPayload(r2) as
   | {
       kind: string;
       rounds?: number;
-      legs?: { initiator: unknown; responder?: { tx_hash?: string; status?: string; token_in_address?: string; token_out_address?: string; amount_in?: string } | null };
+      legs?: {
+        initiator: unknown;
+        responder?: {
+          tx_hash?: string;
+          status?: string;
+          token_in_address?: string;
+          token_out_address?: string;
+          amount_in?: string;
+        } | null;
+      };
       tx_hash?: string | null;
     };
-console.log(`[phase3]   r2 state=${r2State} settlement.kind=${settlement?.kind} rounds=${settlement?.rounds} responder_tx=${settlement?.legs?.responder?.tx_hash}`);
+console.log(
+  `[phase3]   r2 state=${r2State} settlement.kind=${settlement?.kind} rounds=${settlement?.rounds} responder_tx=${settlement?.legs?.responder?.tx_hash}`,
+);
 if (r2State !== 'completed') fail('round 2', `expected completed, got ${r2State}`);
-if (settlement?.kind !== 'settlement') fail('round 2', `expected settlement, got ${settlement?.kind}`);
+if (settlement?.kind !== 'settlement')
+  fail('round 2', `expected settlement, got ${settlement?.kind}`);
 ok('round 2: completed with settlement payload');
 
 // 5. assert responder leg
@@ -286,7 +304,9 @@ if (respLeg.status !== 'success') fail('responder leg', `status=${respLeg.status
 if (!respLeg.tx_hash || !respLeg.tx_hash.startsWith('0x')) {
   fail('responder leg', `bad tx_hash=${respLeg.tx_hash}`);
 }
-console.log(`[phase3]   responder leg tx: https://unichain-sepolia.blockscout.com/tx/${respLeg.tx_hash}`);
+console.log(
+  `[phase3]   responder leg tx: https://unichain-sepolia.blockscout.com/tx/${respLeg.tx_hash}`,
+);
 ok(`responder leg: tx=${respLeg.tx_hash}`);
 
 // 6. fire initiator leg from the test driver (CA's wallet)
@@ -298,7 +318,9 @@ const initResult = await exec.swap({
   amount: TRADE_USDC,
   slippageTolerancePct: 1.0,
 });
-console.log(`[phase3]   initiator leg tx: https://unichain-sepolia.blockscout.com/tx/${initResult.txHash}`);
+console.log(
+  `[phase3]   initiator leg tx: https://unichain-sepolia.blockscout.com/tx/${initResult.txHash}`,
+);
 ok(`initiator leg: status=${initResult.status} tx=${initResult.txHash}`);
 if (initResult.status !== 'success') fail('initiator leg', `status=${initResult.status}`);
 
@@ -329,5 +351,9 @@ ok('both wallets rebalanced (USDC out, peer-state-token in)');
 
 console.log('');
 console.log('[phase3] ✓ PASS');
-console.log(`         responder (MA): https://unichain-sepolia.blockscout.com/tx/${respLeg.tx_hash}`);
-console.log(`         initiator (CA): https://unichain-sepolia.blockscout.com/tx/${initResult.txHash}`);
+console.log(
+  `         responder (MA): https://unichain-sepolia.blockscout.com/tx/${respLeg.tx_hash}`,
+);
+console.log(
+  `         initiator (CA): https://unichain-sepolia.blockscout.com/tx/${initResult.txHash}`,
+);

@@ -18,12 +18,12 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  http,
   type Address,
   type Hex,
   createPublicClient,
   createWalletClient,
   decodeEventLog,
-  http,
   parseAbi,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -80,7 +80,11 @@ const unichainSepolia = {
 
 const deployer = privateKeyToAccount(DEPLOYER_PK);
 const publicClient = createPublicClient({ chain: unichainSepolia, transport: http(RPC) });
-const wallet = createWalletClient({ account: deployer, chain: unichainSepolia, transport: http(RPC) });
+const wallet = createWalletClient({
+  account: deployer,
+  chain: unichainSepolia,
+  transport: http(RPC),
+});
 
 console.log(`[seed] chain=${CHAIN_ID}  rpc=${RPC}  deployer=${deployer.address}`);
 

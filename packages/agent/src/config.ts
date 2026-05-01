@@ -119,7 +119,8 @@ export function loadConfig(): AgentConfig {
       maxBidsForEval: readNumber('BOND_AUCTION_MAX_BIDS', 8),
     },
     settlement: ((): AgentConfig['settlement'] => {
-      const pkEnv = process.env[`WALLET_${state.abbr}_PRIVATE_KEY`];
+      const walletEnvKey = state.abbr === 'TRS' ? 'TREASURY' : state.abbr;
+      const pkEnv = process.env[`WALLET_${walletEnvKey}_PRIVATE_KEY`];
       const apiKey = process.env.UNISWAP_API_KEY ?? '';
       const chainId = readNumber('UNICHAIN_SEPOLIA_CHAIN_ID', 1301);
       const rpc = readString('UNICHAIN_SEPOLIA_RPC', 'https://sepolia.unichain.org');

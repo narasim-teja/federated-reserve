@@ -152,7 +152,9 @@ export function resolveAsset(d: ContractDeployments, assetId: string): TokenInfo
   const base = id.replace(/-TOKEN$/, '').replace(/T$/, '');
   if (d.contracts.StateTokens[base]) return getStateToken(d, base);
   if (d.contracts.StateTokens[id]) return getStateToken(d, id);
-  throw new Error(`cannot resolve asset "${assetId}" — known: USDC, ${Object.keys(d.contracts.StateTokens).join(', ')}`);
+  throw new Error(
+    `cannot resolve asset "${assetId}" — known: USDC, ${Object.keys(d.contracts.StateTokens).join(', ')}`,
+  );
 }
 
 /** Look up a deployed bond by id; returns undefined if Phase 3 bond deploys

@@ -19,13 +19,13 @@
  */
 
 import {
+  http,
   type Address,
   type Hex,
   type PublicClient,
   type WalletClient,
   createPublicClient,
   createWalletClient,
-  http,
   parseAbi,
 } from 'viem';
 import { type PrivateKeyAccount, privateKeyToAccount } from 'viem/accounts';
@@ -196,7 +196,11 @@ export class SwapExecutor {
       rpcUrls: { default: { http: [cfg.rpc] } },
     } as const;
     this.publicClient = createPublicClient({ chain, transport: http(cfg.rpc) });
-    this.walletClient = createWalletClient({ account: this.account, chain, transport: http(cfg.rpc) });
+    this.walletClient = createWalletClient({
+      account: this.account,
+      chain,
+      transport: http(cfg.rpc),
+    });
   }
 
   /** The address this executor signs with. */
@@ -293,7 +297,9 @@ export class SwapExecutor {
   }
 
   /** Step 5: submit the swap tx and wait for confirmation. */
-  async submitSwap(swap: SwapResponse['swap']): Promise<{ txHash: Hex; blockNumber: bigint; status: 'success' | 'reverted' }> {
+  async submitSwap(
+    swap: SwapResponse['swap'],
+  ): Promise<{ txHash: Hex; blockNumber: bigint; status: 'success' | 'reverted' }> {
     if (swap.chainId !== this.chainId) {
       throw new Error(`swap chainId mismatch: ${swap.chainId} vs ${this.chainId}`);
     }

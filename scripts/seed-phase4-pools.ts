@@ -17,12 +17,12 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  http,
   type Address,
   type Hex,
   createPublicClient,
   createWalletClient,
   decodeEventLog,
-  http,
   parseAbi,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -191,7 +191,9 @@ await ensureApproval(usdcAddr, NPM, 'USDC');
 for (const abbr of PHASE4_ABBRS) {
   const t = deployments.contracts.StateTokens[abbr];
   if (!t) {
-    console.warn(`[p4-seed]   ${abbr} StateToken missing — run scripts/deploy-phase4-onchain.ts first`);
+    console.warn(
+      `[p4-seed]   ${abbr} StateToken missing — run scripts/deploy-phase4-onchain.ts first`,
+    );
     continue;
   }
   await ensureApproval(t.address, NPM, `${abbr} (${t.symbol})`);

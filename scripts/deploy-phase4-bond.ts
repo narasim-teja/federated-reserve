@@ -11,7 +11,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Address, type Hex, createPublicClient, createWalletClient, http } from 'viem';
+import { http, type Address, type Hex, createPublicClient, createWalletClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 const REPO_ROOT = join(import.meta.dir, '..');

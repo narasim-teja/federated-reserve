@@ -120,7 +120,16 @@ console.log(`[${cfg.state.abbr}]   MCP Router ready`);
 }
 
 // 4. Start MCP server.
-const handleMcp = makeMcpRequestHandler({ cfg, state, axl, discovery, swapExecutor });
+const handleMcp = makeMcpRequestHandler({
+  cfg,
+  state,
+  axl,
+  discovery,
+  swapExecutor,
+  reasoner,
+  systemPrompt,
+  dataPlane,
+});
 const mcpServer = Bun.serve({
   port: cfg.mcp.serverPort,
   hostname: '127.0.0.1',

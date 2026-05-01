@@ -11,9 +11,9 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Address, parseAbi, createPublicClient, http } from 'viem';
+import { http, type Address, createPublicClient, parseAbi } from 'viem';
 import { SwapExecutor } from '../packages/agent/src/execute.ts';
-import { loadDeployments, getStateToken, getUsdc } from '../packages/shared/src/deployments.ts';
+import { getStateToken, getUsdc, loadDeployments } from '../packages/shared/src/deployments.ts';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const ENV_LOCAL = join(REPO_ROOT, '.env.local');
@@ -98,9 +98,7 @@ console.log(`[smoke] explorer: https://unichain-sepolia.blockscout.com/tx/${resu
 const usdcAfter = await bal(usdc.address, exec.address);
 const matAfter = await bal(mat.address, exec.address);
 console.log(`[smoke] after:  USDC=${usdcAfter}  MAT=${matAfter}`);
-console.log(
-  `[smoke] delta:  USDC=${usdcAfter - usdcBefore}  MAT=${matAfter - matBefore}`,
-);
+console.log(`[smoke] delta:  USDC=${usdcAfter - usdcBefore}  MAT=${matAfter - matBefore}`);
 
 if (result.status !== 'success') {
   console.error('[smoke] FAIL — swap status was not success');

@@ -147,7 +147,8 @@ export function assessCredit(abbr: string, inputs: CreditInputs): CreditAssessme
 
   const score = Math.max(0, Math.min(100, r + u + i + bonus - penalty - extraPenalty));
 
-  const tier = RATING_TABLE.find((t) => score >= t.minScore) ?? RATING_TABLE[RATING_TABLE.length - 1];
+  const tier =
+    RATING_TABLE.find((t) => score >= t.minScore) ?? RATING_TABLE[RATING_TABLE.length - 1];
   if (!tier) {
     // Defensive — RATING_TABLE always has entries.
     return {

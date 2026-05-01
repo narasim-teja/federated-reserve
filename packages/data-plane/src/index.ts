@@ -18,7 +18,7 @@
 import { resolve } from 'node:path';
 import { type DataPlaneHealth, STATES, lookupStateByFips } from '@federated-reserve/shared';
 import { SnapshotCache } from './cache.ts';
-import { type SchedulerKeys, RefreshScheduler } from './scheduler.ts';
+import { RefreshScheduler, type SchedulerKeys } from './scheduler.ts';
 import { ShockCache } from './shock-cache.ts';
 
 function readNumberEnv(key: string, fallback: number): number {
@@ -35,7 +35,8 @@ const CACHE_PATH = resolve(
   process.env.DATA_PLANE_CACHE_PATH ?? resolve(process.cwd(), '../../.data/data-plane-cache.json'),
 );
 const SHOCK_CACHE_PATH = resolve(
-  process.env.DATA_PLANE_SHOCK_CACHE_PATH ?? resolve(process.cwd(), '../../.data/shocks-cache.json'),
+  process.env.DATA_PLANE_SHOCK_CACHE_PATH ??
+    resolve(process.cwd(), '../../.data/shocks-cache.json'),
 );
 const REFRESH_TOKEN = process.env.DATA_PLANE_REFRESH_TOKEN;
 

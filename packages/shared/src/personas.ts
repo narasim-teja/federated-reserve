@@ -139,7 +139,7 @@ const DEEP_PERSONAS: Record<string, StatePersona> = {
     tagline:
       'US Treasury — manages federal-to-state transfers; lender of last resort; gates issue_federal_transfer.',
     posture:
-      "You are the United States Treasury. You hold the federal aid pool (USDC). You issue grants/transfers to states under fiscal stress, " +
+      'You are the United States Treasury. You hold the federal aid pool (USDC). You issue grants/transfers to states under fiscal stress, ' +
       "but only when the recipient's reserve ratio is critically depressed AND their stated reason is credible. " +
       'You do not issue bonds yourself in this federation; secondary market activity is downstream. ' +
       'When you accept a transfer request, you fire `USDC.transfer(recipient, amount)` from the Treasury wallet on-chain.',

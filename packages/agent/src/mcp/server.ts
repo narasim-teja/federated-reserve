@@ -12,9 +12,9 @@
  */
 
 import {
-  MCP_TOOLS,
   type AnnounceFedRateResult,
   type IssueFederalTransferResult,
+  MCP_TOOLS,
   type QueryTreasuryResult,
   type ShareEconomicIndicatorResult,
   type ShareTopologyResult,
@@ -31,8 +31,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { AxlClient } from '../axl-client.ts';
 import type { AgentConfig } from '../config.ts';
+import type { DataPlaneClient } from '../data-plane-client.ts';
 import type { MeshDiscovery } from '../discovery.ts';
 import type { SwapExecutor } from '../execute.ts';
+import type { Reasoner } from '../reason.ts';
 import { type AgentState, pushReceivedFedRate, pushReceivedIndicator } from '../state.ts';
 
 interface ServerDeps {
@@ -41,6 +43,63 @@ interface ServerDeps {
   axl: AxlClient;
   discovery: MeshDiscovery;
   swapExecutor?: SwapExecutor;
+  reasoner?: Reasoner;
+  systemPrompt?: string;
+  dataPlane?: DataPlaneClient;
+}
+
+async function decideTreasuryTransferWithReasoner(
+  deps: ServerDeps,
+  input: { recipient_fips: number; amount_usd: number; reason: string },
+  recipientAbbr: string,
+): Promise<{ approved: boolean; rationale: string } | null> {
+  if (!deps.reasoner || !deps.cfg.reasoningEnabled) return null;
+
+  let recipientSnapshot = '';
+  if (deps.dataPlane) {
+    try {
+      const snap = await deps.dataPlane.snapshot(input.recipient_fips);
+      if (snap) {
+        recipientSnapshot = JSON.stringify({
+          state: snap.state_abbr,
+          indicators: snap.indicators,
+        });
+      }
+    } catch {
+      // Best-effort context only.
+    }
+  }
+
+  const latestFedRate = deps.state.receivedFedRates?.[deps.state.receivedFedRates.length - 1];
+  const prompt = [
+    'Skill: issue_federal_transfer. You are the US Treasury agent deciding whether to release federal-pool USDC to a state.',
+    `Recipient: ${recipientAbbr} (FIPS ${input.recipient_fips}). Amount requested: $${input.amount_usd}.`,
+    `Requester rationale: "${input.reason}".`,
+    latestFedRate
+      ? `Latest received FED rate: ${latestFedRate.rateBps}bps (${latestFedRate.rationale}).`
+      : 'Latest received FED rate: none.',
+    recipientSnapshot ? `Recipient public-data snapshot: ${recipientSnapshot}` : '',
+    'Approve credible, bounded operational or emergency transfers. Decline invalid, excessive, or poorly justified transfers.',
+    'Hard safety policy outside the model: amounts must be positive and below $10,000,000.',
+    'Respond ONLY with JSON: { "approved": true | false, "rationale": "<one short sentence>" }.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  try {
+    const result = await deps.reasoner.reasonJson<{ approved: boolean; rationale: string }>({
+      tier: deps.cfg.state.tier,
+      system: deps.systemPrompt ?? '',
+      messages: [{ role: 'user', content: prompt }],
+    });
+    return {
+      approved: Boolean(result.value.approved),
+      rationale: result.value.rationale,
+    };
+  } catch (err) {
+    console.warn(`[TRS] federal transfer reasoner failed: ${String(err)}`);
+    return null;
+  }
 }
 
 function registerTools(mcp: McpServer, deps: ServerDeps): void {
@@ -171,14 +230,18 @@ function registerTools(mcp: McpServer, deps: ServerDeps): void {
         };
         return { content: [{ type: 'text', text: JSON.stringify(result) }] };
       }
-      // Phase 4 simple gating: approve if amount < 10M and recipient is a
-      // real state. Phase 5+ adds a reasoner check on recipient stress level.
-      const approved = input.amount_usd > 0 && input.amount_usd < 10_000_000;
+      const withinSafetyLimit = input.amount_usd > 0 && input.amount_usd < 10_000_000;
+      const decision = withinSafetyLimit
+        ? await decideTreasuryTransferWithReasoner(deps, input, recipient.abbr)
+        : null;
+      const approved = withinSafetyLimit && (decision?.approved ?? true);
       let txHash = '';
       let blockNumber = '';
-      let rationale = '';
-      if (!approved) {
+      let rationale = decision?.rationale ?? '';
+      if (!withinSafetyLimit) {
         rationale = `Treasury declines transfer of $${input.amount_usd} (over $10M cap or invalid amount).`;
+      } else if (!approved) {
+        rationale = rationale || `Treasury declines transfer of $${input.amount_usd}.`;
       } else if (!deps.swapExecutor || !cfg.settlement.enabled) {
         rationale = `Treasury approval logic OK but settlement wallet not wired (settlement.enabled=${cfg.settlement.enabled}).`;
       } else {

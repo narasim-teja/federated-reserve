@@ -17,12 +17,12 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  http,
   type Address,
   type Hex,
   createPublicClient,
   createWalletClient,
   decodeEventLog,
-  http,
   parseAbi,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -77,7 +77,9 @@ const npmAbi = parseAbi([
 const factoryAbi = parseAbi([
   'function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool)',
 ]);
-const poolAbi = parseAbi(['function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool)']);
+const poolAbi = parseAbi([
+  'function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool)',
+]);
 
 async function waitForPoolReady(token0: Address, token1: Address): Promise<Address> {
   for (let attempt = 1; attempt <= 30; attempt++) {
@@ -104,21 +106,24 @@ async function waitForPoolReady(token0: Address, token1: Address): Promise<Addre
 
 if (!existsSync(DEPLOYMENTS_PATH)) throw new Error('deployments file missing');
 const deployments = JSON.parse(readFileSync(DEPLOYMENTS_PATH, 'utf8'));
-const byState = deployments.pools?.byState as Record<string, {
-  state: string;
-  pair: string;
-  token0: Address;
-  token1: Address;
-  fee: number;
-  sqrtPriceX96: string;
-  poolAddress: Address;
-  tokenId: string;
-  liquidity: string;
-  amount0Used: string;
-  amount1Used: string;
-  initTx: Hex;
-  mintTx: Hex;
-}>;
+const byState = deployments.pools?.byState as Record<
+  string,
+  {
+    state: string;
+    pair: string;
+    token0: Address;
+    token1: Address;
+    fee: number;
+    sqrtPriceX96: string;
+    poolAddress: Address;
+    tokenId: string;
+    liquidity: string;
+    amount0Used: string;
+    amount1Used: string;
+    initTx: Hex;
+    mintTx: Hex;
+  }
+>;
 if (!byState) throw new Error('no pools.byState — run seed-pools.ts first');
 
 const perPoolUsdc = BigInt(deployments.reserves.perPoolUsdc as string);
@@ -176,7 +181,12 @@ for (const [abbr, entry] of Object.entries(byState)) {
     try {
       const parsed = decodeEventLog({ abi: npmAbi, data: log.data, topics: log.topics });
       if (parsed.eventName === 'IncreaseLiquidity') {
-        const a = parsed.args as { tokenId: bigint; liquidity: bigint; amount0: bigint; amount1: bigint };
+        const a = parsed.args as {
+          tokenId: bigint;
+          liquidity: bigint;
+          amount0: bigint;
+          amount1: bigint;
+        };
         tokenId = a.tokenId;
         liquidity = a.liquidity;
         used0 = a.amount0;

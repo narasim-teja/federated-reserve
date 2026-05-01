@@ -52,9 +52,7 @@ export interface BondMintSettlementResult {
 }
 
 /** Issuer-side helper that performs the on-chain mint to the winning bidder. */
-export type BondMintSettler = (
-  winningBid: BondBid,
-) => Promise<BondMintSettlementResult | null>;
+export type BondMintSettler = (winningBid: BondBid) => Promise<BondMintSettlementResult | null>;
 
 export interface BondAuctionRegistryConfig {
   /** Auction window after the first bid arrives. */
@@ -122,8 +120,9 @@ export class BondAuctionRegistry {
       };
     }
 
+    const currentAuction = auction;
     const award = new Promise<BondAward>((resolve) => {
-      auction!.parked.push({ bid, resolve });
+      currentAuction.parked.push({ bid, resolve });
     });
 
     // Start the eval timer on the first bid.
