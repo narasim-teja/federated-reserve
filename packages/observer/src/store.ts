@@ -9,17 +9,28 @@ import {
   lookupStateByFips,
 } from '@federated-reserve/shared';
 import type {
+  FedRateHistoryEntry,
   FedRateView,
   InftManifest,
   InftManifestEntry,
   MeshSnapshot,
+  NegotiationRoundPayload,
+  NegotiationView,
   ObserverEvent,
   ObserverEventKind,
+  ReflectionPayload,
+  ShockInjectedPayload,
   StateDashboardView,
+  SwapExecutedPayload,
 } from './types.ts';
 
 const EVENT_CAP = 240;
 const STATE_MEMORY_CAP = 120;
+const FED_RATE_HISTORY_CAP = 24;
+const SWAP_HISTORY_CAP = 40;
+const NEGOTIATION_CAP = 32;
+const NEGOTIATION_TTL_MS = 30 * 60 * 1000;
+const SHOCK_TTL_MS = 30 * 60 * 1000;
 
 interface MeshView {
   observerPubkey: string;
@@ -40,9 +51,15 @@ export class ObserverStore {
   private readonly eventTimes: number[] = [];
   private readonly subscribers = new Set<(event: ObserverEvent) => void>();
   private nextEventId = 1;
+  private nextHistoryId = 1;
   private latestFedRate: FedRateView | null = null;
   private mesh: MeshView = { observerPubkey: '', peers: [], refreshedAt: null };
   private infts: InftManifestEntry[] = [];
+  private readonly fedRateHistory: FedRateHistoryEntry[] = [];
+  private readonly negotiations = new Map<string, NegotiationView>();
+  private readonly swaps: SwapExecutedPayload[] = [];
+  private readonly shocks = new Map<string, ShockInjectedPayload>();
+  private readonly reflections = new Map<number, ReflectionPayload>();
 
   constructor(
     private readonly memoryRoot: string,
@@ -86,13 +103,97 @@ export class ObserverStore {
   }
 
   ingestFedRate(input: AnnounceFedRateInput): void {
-    this.latestFedRate = {
+    const view: FedRateView = {
       rate_bps: input.rate_bps,
       effective: input.effective,
       rationale: input.rationale,
       received_at: new Date().toISOString(),
     };
-    this.emit('fed_rate_received', this.latestFedRate);
+    this.latestFedRate = view;
+    const last = this.fedRateHistory[this.fedRateHistory.length - 1];
+    if (!last || last.rate_bps !== view.rate_bps || last.effective !== view.effective) {
+      this.fedRateHistory.push({ id: this.nextHistoryId++, ...view });
+      if (this.fedRateHistory.length > FED_RATE_HISTORY_CAP) {
+        this.fedRateHistory.splice(0, this.fedRateHistory.length - FED_RATE_HISTORY_CAP);
+      }
+    }
+    this.emit('fed_rate_received', view);
+  }
+
+  ingestNegotiationRound(payload: NegotiationRoundPayload): void {
+    const existing = this.negotiations.get(payload.task_id);
+    const now = payload.emitted_at;
+    if (!existing) {
+      const view: NegotiationView = {
+        task_id: payload.task_id,
+        context_id: payload.context_id ?? null,
+        skill: payload.skill,
+        participants: dedupe([
+          payload.from_fips,
+          ...(payload.to_fips != null ? [payload.to_fips] : []),
+        ]),
+        status: terminalStage(payload.stage)
+          ? settlementStatus(payload.stage)
+          : 'open',
+        rounds: [payload],
+        started_at: now,
+        last_at: now,
+      };
+      this.negotiations.set(payload.task_id, view);
+    } else {
+      existing.rounds.push(payload);
+      existing.last_at = now;
+      if (payload.from_fips != null && !existing.participants.includes(payload.from_fips)) {
+        existing.participants.push(payload.from_fips);
+      }
+      if (payload.to_fips != null && !existing.participants.includes(payload.to_fips)) {
+        existing.participants.push(payload.to_fips);
+      }
+      if (terminalStage(payload.stage)) existing.status = settlementStatus(payload.stage);
+    }
+    this.trimNegotiations();
+    this.emit('negotiation_round', payload);
+  }
+
+  ingestSwapExecuted(payload: SwapExecutedPayload): void {
+    this.swaps.push(payload);
+    if (this.swaps.length > SWAP_HISTORY_CAP) {
+      this.swaps.splice(0, this.swaps.length - SWAP_HISTORY_CAP);
+    }
+    this.emit('swap_executed', payload);
+  }
+
+  ingestShockInjected(payload: ShockInjectedPayload): void {
+    this.shocks.set(`${payload.state_fips}:${payload.event_type}:${payload.emitted_at}`, payload);
+    this.gcShocks();
+    this.emit('shock_injected', payload);
+  }
+
+  ingestReflection(payload: ReflectionPayload): void {
+    this.reflections.set(payload.state_fips, payload);
+    this.emit('reflection', payload);
+  }
+
+  private trimNegotiations(): void {
+    if (this.negotiations.size <= NEGOTIATION_CAP) return;
+    const cutoff = Date.now() - NEGOTIATION_TTL_MS;
+    const entries = [...this.negotiations.entries()];
+    entries.sort((a, b) => a[1].last_at.localeCompare(b[1].last_at));
+    for (const [id, view] of entries) {
+      if (this.negotiations.size <= NEGOTIATION_CAP) break;
+      if (view.status !== 'open' || new Date(view.last_at).getTime() < cutoff) {
+        this.negotiations.delete(id);
+      } else {
+        break;
+      }
+    }
+  }
+
+  private gcShocks(): void {
+    const cutoff = Date.now() - SHOCK_TTL_MS;
+    for (const [key, shock] of this.shocks) {
+      if (new Date(shock.emitted_at).getTime() < cutoff) this.shocks.delete(key);
+    }
   }
 
   updateMesh(observerPubkey: string, peers: string[]): void {
@@ -153,6 +254,7 @@ export class ObserverStore {
   snapshot(): MeshSnapshot {
     const now = new Date().toISOString();
     const states = [...this.states.values()].sort((a, b) => a.abbr.localeCompare(b.abbr));
+    this.gcShocks();
     return {
       generated_at: now,
       mesh: {
@@ -165,12 +267,52 @@ export class ObserverStore {
         messages_seen: this.events.length,
         messages_per_minute: this.messagesPerMinute(),
         total_known_tvl_usd: states.reduce((sum, s) => sum + (s.total_value_usd ?? 0), 0),
+        swaps_executed: this.swaps.length,
+        negotiations_open: [...this.negotiations.values()].filter((n) => n.status === 'open')
+          .length,
+        shocks_active: this.shocks.size,
       },
       latest_fed_rate: this.latestFedRate,
       states,
       events: [...this.events].reverse().slice(0, 80),
       infts: this.infts,
+      fed_rate_history: [...this.fedRateHistory],
+      reflections: [...this.reflections.values()].sort((a, b) =>
+        b.emitted_at.localeCompare(a.emitted_at),
+      ),
+      negotiations: [...this.negotiations.values()].sort((a, b) =>
+        b.last_at.localeCompare(a.last_at),
+      ),
+      swaps: [...this.swaps].reverse(),
+      shocks: [...this.shocks.values()].sort((a, b) => b.emitted_at.localeCompare(a.emitted_at)),
     };
+  }
+
+  fedRateHistorySnapshot(): FedRateHistoryEntry[] {
+    return [...this.fedRateHistory];
+  }
+
+  negotiationSnapshot(): NegotiationView[] {
+    return [...this.negotiations.values()].sort((a, b) => b.last_at.localeCompare(a.last_at));
+  }
+
+  negotiation(taskId: string): NegotiationView | null {
+    return this.negotiations.get(taskId) ?? null;
+  }
+
+  swapHistorySnapshot(): SwapExecutedPayload[] {
+    return [...this.swaps].reverse();
+  }
+
+  shockSnapshot(): ShockInjectedPayload[] {
+    this.gcShocks();
+    return [...this.shocks.values()].sort((a, b) => b.emitted_at.localeCompare(a.emitted_at));
+  }
+
+  reflectionsSnapshot(): ReflectionPayload[] {
+    return [...this.reflections.values()].sort((a, b) =>
+      b.emitted_at.localeCompare(a.emitted_at),
+    );
   }
 
   eventsSince(limit = 100): ObserverEvent[] {
@@ -246,6 +388,25 @@ export function defaultManifestPath(): string {
   return resolve(
     process.env.INFT_MANIFEST_PATH ?? resolve(process.cwd(), '../../.data/inft-manifest.json'),
   );
+}
+
+function dedupe<T>(values: T[]): T[] {
+  return [...new Set(values)];
+}
+
+function terminalStage(stage: NegotiationRoundPayload['stage']): boolean {
+  return (
+    stage === 'accept' ||
+    stage === 'reject' ||
+    stage === 'settlement' ||
+    stage === 'coalition_join' ||
+    stage === 'coalition_decline'
+  );
+}
+
+function settlementStatus(stage: NegotiationRoundPayload['stage']): NegotiationView['status'] {
+  if (stage === 'reject' || stage === 'coalition_decline') return 'rejected';
+  return 'settled';
 }
 
 function deriveHealth(

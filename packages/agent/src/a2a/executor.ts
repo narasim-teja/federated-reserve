@@ -47,6 +47,7 @@ import {
 import type { AgentConfig } from '../config.ts';
 import type { DataPlaneClient } from '../data-plane-client.ts';
 import type { SwapExecutor } from '../execute.ts';
+import type { ObserverTelemetry } from '../observer-client.ts';
 import type { Reasoner } from '../reason.ts';
 import type { AgentState } from '../state.ts';
 import {
@@ -122,6 +123,7 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     private readonly systemPrompt: string = '',
     private readonly swapExecutor?: SwapExecutor,
     private readonly dataPlane?: DataPlaneClient,
+    private readonly telemetry?: ObserverTelemetry,
   ) {
     this.bondAuctions = new BondAuctionRegistry({
       windowMs: cfg.bondAuction.windowMs,
@@ -210,6 +212,17 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
         return;
       }
 
+      this.pushNegotiation({
+        ctx,
+        skill: 'negotiate-bilateral-swap',
+        round: 1,
+        fromFips: incoming.initiator_fips,
+        toFips: this.cfg.state.fips,
+        stage: 'proposal',
+        summary: incoming.rationale,
+        terms: { give: incoming.give, receive: incoming.receive },
+      });
+
       const decision = await this.decideOnProposal(
         incoming.give,
         incoming.receive,
@@ -227,15 +240,35 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       bus.publish(task);
 
       if (decision.action === 'reject') {
+        this.pushNegotiation({
+          ctx,
+          skill: 'negotiate-bilateral-swap',
+          round: 1,
+          fromFips: this.cfg.state.fips,
+          toFips: incoming.initiator_fips,
+          stage: 'reject',
+          summary: decision.rationale,
+        });
         this.publishStatus(ctx, bus, 'failed', `rejected: ${decision.rationale}`, true);
         return;
       }
       if (decision.action === 'accept') {
+        this.pushNegotiation({
+          ctx,
+          skill: 'negotiate-bilateral-swap',
+          round: 1,
+          fromFips: this.cfg.state.fips,
+          toFips: incoming.initiator_fips,
+          stage: 'accept',
+          summary: decision.rationale,
+          terms: { give: incoming.give, receive: incoming.receive },
+        });
         const settlement = await this.makeSettlement(
           incoming.initiator_fips,
           incoming.give,
           incoming.receive,
           1,
+          ctx,
         );
         bus.publish({
           kind: 'status-update',
@@ -262,6 +295,16 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
         receive: decision.receive ?? incoming.give,
         rationale: decision.rationale,
       };
+      this.pushNegotiation({
+        ctx,
+        skill: 'negotiate-bilateral-swap',
+        round: 1,
+        fromFips: this.cfg.state.fips,
+        toFips: incoming.initiator_fips,
+        stage: 'counter',
+        summary: decision.rationale,
+        terms: { give: counter.give, receive: counter.receive },
+      });
       bus.publish({
         kind: 'status-update',
         taskId: ctx.taskId,
@@ -279,16 +322,37 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
 
     // Continuation
     const rounds = ctx.task.history?.length ?? 1;
+    const initiatorFips = this.findInitiatorFips(ctx.task);
     if (incoming.kind === 'reject') {
+      this.pushNegotiation({
+        ctx,
+        skill: 'negotiate-bilateral-swap',
+        round: rounds,
+        fromFips: initiatorFips,
+        toFips: this.cfg.state.fips,
+        stage: 'reject',
+        summary: incoming.reason ?? 'rejected',
+      });
       this.failTask(ctx, bus, `initiator rejected: ${incoming.reason}`);
       return;
     }
     if (incoming.kind === 'accept') {
+      this.pushNegotiation({
+        ctx,
+        skill: 'negotiate-bilateral-swap',
+        round: rounds,
+        fromFips: initiatorFips,
+        toFips: this.cfg.state.fips,
+        stage: 'accept',
+        summary: 'initiator accepted; settling',
+        terms: { give: incoming.agreed_give, receive: incoming.agreed_receive },
+      });
       const settlement = await this.makeSettlement(
-        this.findInitiatorFips(ctx.task),
+        initiatorFips,
         incoming.agreed_give,
         incoming.agreed_receive,
         rounds,
+        ctx,
       );
       bus.publish({
         kind: 'status-update',
@@ -305,6 +369,16 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       return;
     }
     if (incoming.kind === 'counter') {
+      this.pushNegotiation({
+        ctx,
+        skill: 'negotiate-bilateral-swap',
+        round: rounds,
+        fromFips: initiatorFips,
+        toFips: this.cfg.state.fips,
+        stage: 'counter',
+        summary: incoming.rationale,
+        terms: { give: incoming.give, receive: incoming.receive },
+      });
       let decision: ReasonerDecision;
       if (rounds >= MAX_NEGOTIATION_ROUNDS) {
         decision = { action: 'accept', rationale: 'round cap reached, accepting' };
@@ -317,14 +391,34 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
         );
       }
       if (decision.action === 'reject') {
+        this.pushNegotiation({
+          ctx,
+          skill: 'negotiate-bilateral-swap',
+          round: rounds,
+          fromFips: this.cfg.state.fips,
+          toFips: initiatorFips,
+          stage: 'reject',
+          summary: decision.rationale,
+        });
         this.failTask(ctx, bus, `counter rejected: ${decision.rationale}`);
         return;
       }
+      this.pushNegotiation({
+        ctx,
+        skill: 'negotiate-bilateral-swap',
+        round: rounds,
+        fromFips: this.cfg.state.fips,
+        toFips: initiatorFips,
+        stage: 'accept',
+        summary: decision.rationale,
+        terms: { give: incoming.give, receive: incoming.receive },
+      });
       const settlement = await this.makeSettlement(
-        this.findInitiatorFips(ctx.task),
+        initiatorFips,
         incoming.give,
         incoming.receive,
         rounds,
+        ctx,
       );
       bus.publish({
         kind: 'status-update',
@@ -1386,8 +1480,41 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     agreedGive: AssetAmount,
     agreedReceive: AssetAmount,
     rounds: number,
+    ctx?: RequestContext,
   ): Promise<SwapSettlement> {
     const responderLeg = await this.executeResponderLeg(initiatorFips, agreedGive, agreedReceive);
+    const explorerUrl = responderLeg?.tx_hash
+      ? `https://sepolia.uniscan.xyz/tx/${responderLeg.tx_hash}`
+      : undefined;
+    if (ctx) {
+      this.pushNegotiation({
+        ctx,
+        skill: 'negotiate-bilateral-swap',
+        round: rounds,
+        fromFips: this.cfg.state.fips,
+        toFips: initiatorFips,
+        stage: 'settlement',
+        summary: responderLeg
+          ? `settled on Unichain (tx ${responderLeg.tx_hash.slice(0, 10)}…)`
+          : 'settlement complete (off-chain)',
+        terms: {
+          give: agreedGive,
+          receive: agreedReceive,
+          tx_hash: responderLeg?.tx_hash,
+          explorer_url: explorerUrl,
+        },
+      });
+    }
+    if (responderLeg?.tx_hash) {
+      this.telemetry?.reportSwapExecuted({
+        from_fips: initiatorFips,
+        to_fips: this.cfg.state.fips,
+        give: agreedGive,
+        receive: agreedReceive,
+        tx_hash: responderLeg.tx_hash,
+        explorer_url: explorerUrl,
+      });
+    }
     return {
       kind: 'settlement',
       initiator_fips: initiatorFips,
@@ -1578,6 +1705,43 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       final: true,
     } satisfies TaskStatusUpdateEvent);
     bus.finished();
+  }
+
+  /**
+   * Phase 5+ — push a single negotiation transition to the observer so the
+   * dashboard can render the multi-turn chat-thread modal. Best-effort;
+   * never throws into the A2A executor.
+   */
+  private pushNegotiation(args: {
+    ctx: RequestContext;
+    skill: string;
+    round: number;
+    fromFips: number;
+    toFips?: number | null;
+    stage:
+      | 'proposal'
+      | 'counter'
+      | 'accept'
+      | 'reject'
+      | 'settlement'
+      | 'coalition_join'
+      | 'coalition_decline'
+      | 'coalition_counter';
+    summary: string;
+    terms?: import('../observer-client.ts').NegotiationRoundEnvelope['terms'];
+  }): void {
+    if (!this.telemetry) return;
+    this.telemetry.reportNegotiationRound({
+      task_id: args.ctx.taskId,
+      context_id: args.ctx.contextId ?? null,
+      skill: args.skill,
+      round: args.round,
+      from_fips: args.fromFips,
+      to_fips: args.toFips ?? null,
+      stage: args.stage,
+      summary: args.summary,
+      terms: args.terms ?? null,
+    });
   }
 
   private publishStatus(

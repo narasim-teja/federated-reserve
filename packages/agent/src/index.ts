@@ -27,6 +27,7 @@ import { SwapExecutor } from './execute.ts';
 import { McpRouterClient } from './mcp-router-client.ts';
 import { makeMcpRequestHandler } from './mcp/server.ts';
 import { makeMemory } from './memory.ts';
+import { ObserverTelemetry } from './observer-client.ts';
 import { type Reasoner, getReasoner } from './reason.ts';
 import { makeInitialState } from './state.ts';
 import { buildAgentSystemPrompt } from './system-prompts.ts';
@@ -48,6 +49,7 @@ const axl = new AxlClient(cfg.axl.apiUrl);
 const router = new McpRouterClient(cfg.mcp.routerUrl);
 const discovery = new MeshDiscovery(cfg, axl);
 const dataPlane = new DataPlaneClient(cfg.dataPlaneUrl);
+const telemetry = new ObserverTelemetry(cfg.observerHttpUrl);
 
 let reasoner: Reasoner | undefined;
 if (cfg.reasoningEnabled) {
@@ -152,7 +154,7 @@ console.log(
 
 // 6. Start A2A server (now reasoner-aware + Phase 3 swap-executor-aware
 //    + Phase 4+ data-plane-aware so handlers can read NOAA shocks).
-const a2a = startA2aServer(cfg, state, reasoner, systemPrompt, swapExecutor, dataPlane);
+const a2a = startA2aServer(cfg, state, reasoner, systemPrompt, swapExecutor, dataPlane, telemetry);
 
 // 7. Discovery loop.
 discovery.start(10_000);
@@ -167,6 +169,7 @@ const tick = startTickLoop({
   state,
   reasoner,
   systemPrompt,
+  telemetry,
 });
 
 // Persist initial state immediately so the file exists.

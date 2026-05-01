@@ -24,6 +24,7 @@ import type { AgentConfig } from './config.ts';
 import type { DataPlaneClient } from './data-plane-client.ts';
 import type { MeshDiscovery } from './discovery.ts';
 import type { AgentMemory } from './memory.ts';
+import type { ObserverTelemetry } from './observer-client.ts';
 import type { Reasoner } from './reason.ts';
 import { runReflection } from './reflect.ts';
 import type { AgentState } from './state.ts';
@@ -38,6 +39,7 @@ export interface TickDeps {
   reasoner?: Reasoner;
   /** System prompt baked at startup; passed to the reasoner on every call. */
   systemPrompt: string;
+  telemetry?: ObserverTelemetry;
 }
 
 export function startTickLoop(deps: TickDeps): { stop: () => void } {
@@ -270,6 +272,13 @@ async function sweepNoaaShocksAndFanOut(
       }
       injected.push(`${state.abbr}/${event.event_type}@sev${event.severity}`);
       recently.add(event.event_id);
+      deps.telemetry?.reportShockInjected({
+        state_fips: event.state_fips,
+        shock_kind: event.shock_kind,
+        event_type: event.event_type,
+        severity: event.severity,
+        source: 'NOAA',
+      });
     } catch (err) {
       failed.push(`${state.abbr}/${event.event_type}`);
       console.warn(`[FED] shock fan-out FAILED for ${state.abbr}: ${(err as Error).message}`);

@@ -14,6 +14,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { Hono } from 'hono';
 import { AxlClient, McpRouterClient } from './axl.ts';
+import { mountRoutes } from './routes.ts';
 import { ObserverStore, defaultManifestPath, defaultMemoryRoot } from './store.ts';
 import type { ObserverEvent } from './types.ts';
 
@@ -41,7 +42,8 @@ const httpPort = readNumber('OBSERVER_PORT', 3001);
 const mcpPort = readNumber('MCP_SERVER_PORT', 7200);
 const axl = new AxlClient(process.env.AXL_API_URL ?? 'http://127.0.0.1:9102');
 const router = new McpRouterClient(process.env.MCP_ROUTER_URL ?? 'http://127.0.0.1:9103');
-const store = new ObserverStore(defaultMemoryRoot(), defaultManifestPath());
+const memoryRoot = defaultMemoryRoot();
+const store = new ObserverStore(memoryRoot, defaultManifestPath());
 
 function makeMcpRequestHandler() {
   return async (req: Request): Promise<Response> => {
@@ -156,6 +158,12 @@ const mcpServer = Bun.serve({
 await router.register(TREASURER_SERVICE_NAME, mcpEndpoint);
 
 const app = new Hono();
+app.use('*', async (c, next) => {
+  await next();
+  c.header('access-control-allow-origin', '*');
+  c.header('access-control-allow-methods', 'GET,POST,OPTIONS');
+  c.header('access-control-allow-headers', 'content-type');
+});
 app.options('*', () => json({ ok: true }));
 app.get('/healthz', () =>
   json({
@@ -170,6 +178,8 @@ app.get('/events', (c) =>
   json({ events: store.eventsSince(Number(c.req.query('limit') ?? '100')) }),
 );
 app.get('/infts', () => json({ entries: store.snapshot().infts }));
+
+mountRoutes({ app, store, memoryRoot });
 
 const clients = new Set<Bun.ServerWebSocket<unknown>>();
 const unsubscribe = store.subscribe((event: ObserverEvent) => {

@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils';
 interface TopbarProps {
   snapshot: Snapshot | null;
   connection: 'idle' | 'connecting' | 'live' | 'retrying';
+  onOpenPalette?: () => void;
 }
 
 const DEFCON_LEVELS = [
@@ -41,7 +42,7 @@ function deriveDefcon(snapshot: Snapshot | null): {
   };
 }
 
-export function Topbar({ snapshot, connection }: TopbarProps) {
+export function Topbar({ snapshot, connection, onOpenPalette }: TopbarProps) {
   const clock = useUtcClock();
   const defcon = useMemo(() => deriveDefcon(snapshot), [snapshot]);
   const live = connection === 'live';
@@ -104,7 +105,12 @@ export function Topbar({ snapshot, connection }: TopbarProps) {
 
       <div className="flex items-center gap-1 pl-2 border-l border-[var(--color-border)]">
         <ToolbarButton icon={<Bell className="h-3.5 w-3.5" />} count={alerts} />
-        <ToolbarButton icon={<Search className="h-3.5 w-3.5" />} label="Search" />
+        <ToolbarButton
+          icon={<Search className="h-3.5 w-3.5" />}
+          label="Jump"
+          shortcut="⌘K"
+          onClick={onOpenPalette}
+        />
         <ToolbarButton icon={<Maximize2 className="h-3.5 w-3.5" />} />
         <ToolbarButton icon={<Settings className="h-3.5 w-3.5" />} />
       </div>
@@ -149,18 +155,28 @@ function ToolbarButton({
   icon,
   count,
   label,
+  shortcut,
+  onClick,
 }: {
   icon: React.ReactNode;
   count?: number;
   label?: string;
+  shortcut?: string;
+  onClick?: () => void;
 }) {
   return (
     <button
       type="button"
+      onClick={onClick}
       className="relative inline-flex items-center gap-1.5 rounded px-2 py-1 text-[var(--color-fg-muted)] hover:bg-[var(--color-surface)]/60 hover:text-[var(--color-fg)]"
     >
       {icon}
       {label && <span className="hidden lg:inline text-[10px]">{label}</span>}
+      {shortcut && (
+        <span className="hidden lg:inline rounded border border-[var(--color-border)] px-1 py-px text-[9px] tracking-[0.08em] text-[var(--color-fg-subtle)]">
+          {shortcut}
+        </span>
+      )}
       {count != null && count > 0 && (
         <span className="absolute -top-0.5 -right-0.5 inline-flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-[var(--color-red)] px-1 text-[9px] font-bold text-[var(--color-bg)]">
           {count}

@@ -19,6 +19,8 @@ const badgeVariants = cva(
           'border-[color-mix(in_oklch,var(--color-cyan)_55%,transparent)] bg-[color-mix(in_oklch,var(--color-cyan)_18%,transparent)] text-[var(--color-cyan)]',
         violet:
           'border-[color-mix(in_oklch,var(--color-violet)_55%,transparent)] bg-[color-mix(in_oklch,var(--color-violet)_18%,transparent)] text-[var(--color-violet)]',
+        rose:
+          'border-[color-mix(in_oklch,var(--color-rose)_55%,transparent)] bg-[color-mix(in_oklch,var(--color-rose)_18%,transparent)] text-[var(--color-rose)]',
       },
     },
     defaultVariants: {

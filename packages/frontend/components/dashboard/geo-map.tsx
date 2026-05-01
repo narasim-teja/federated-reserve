@@ -1,18 +1,23 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useUsAtlas, useStateLookup } from '@/hooks/use-us-atlas';
-import type { Health, StateView } from '@/lib/types';
+import type { Health, StateView, SwapEvent } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 interface GeoMapProps {
   states: StateView[];
   selectedFips: number | null;
+  hoveredFips?: number | null;
   onSelect: (fips: number) => void;
+  onHover?: (fips: number | null) => void;
   /** Map of fips → monotonic counter; flashes a ring when the value changes. */
   pulseFor: Record<number, number>;
   /** When true, dim observer-tier states. */
   deepOnly: boolean;
+  /** Capital-flow arcs to animate; each fades after ~3s. */
+  arcs?: (SwapEvent & { id: number })[];
+  onArcExpire?: (id: number) => void;
 }
 
 const FILL: Record<Health, string> = {
@@ -36,9 +41,25 @@ const PULSE_COLOR: Record<Health, string> = {
   unknown: 'var(--color-cyan)',
 };
 
-export function GeoMap({ states, selectedFips, onSelect, pulseFor, deepOnly }: GeoMapProps) {
+export function GeoMap({
+  states,
+  selectedFips,
+  hoveredFips,
+  onSelect,
+  onHover,
+  pulseFor,
+  deepOnly,
+  arcs,
+  onArcExpire,
+}: GeoMapProps) {
   const { data: atlas, error } = useUsAtlas();
   const lookup = useStateLookup(atlas);
+
+  useEffect(() => {
+    if (!arcs || arcs.length === 0 || !onArcExpire) return;
+    const timers = arcs.map((arc) => setTimeout(() => onArcExpire(arc.id), 3200));
+    return () => timers.forEach(clearTimeout);
+  }, [arcs, onArcExpire]);
 
   const stateByFips = useMemo(() => {
     const m = new Map<number, StateView>();
@@ -106,20 +127,25 @@ export function GeoMap({ states, selectedFips, onSelect, pulseFor, deepOnly }: G
             const data = stateByFips.get(feat.fips);
             const health: Health = data?.health ?? 'unknown';
             const isSelected = selectedFips === feat.fips;
+            const isHovered = hoveredFips === feat.fips;
             const dimmed = deepOnly && data?.tier !== 'deep';
             return (
               <path
                 key={feat.id}
                 d={feat.d}
                 onClick={() => onSelect(feat.fips)}
+                onMouseEnter={() => onHover?.(feat.fips)}
+                onMouseLeave={() => onHover?.(null)}
                 className={cn(
                   'cursor-pointer transition-[fill,stroke,opacity] duration-200',
                   FILL[health],
                   STROKE[health],
-                  isSelected && 'fill-[color-mix(in_oklch,var(--color-cyan)_30%,transparent)] stroke-[var(--color-cyan)]',
+                  isSelected &&
+                    'fill-[color-mix(in_oklch,var(--color-cyan)_30%,transparent)] stroke-[var(--color-cyan)]',
+                  isHovered && !isSelected && 'stroke-[var(--color-amber)] opacity-100',
                   dimmed && 'opacity-25',
                 )}
-                strokeWidth={isSelected ? 1.4 : 0.6}
+                strokeWidth={isSelected ? 1.4 : isHovered ? 1.1 : 0.6}
               >
                 <title>
                   {feat.name} · {health}
@@ -172,6 +198,68 @@ export function GeoMap({ states, selectedFips, onSelect, pulseFor, deepOnly }: G
             </g>
           ))}
         </g>
+
+        {/* Capital-flow arcs */}
+        {arcs && arcs.length > 0 && (
+          <g>
+            {arcs.map((arc) => {
+              const from = lookup.get(arc.from_fips);
+              const to = lookup.get(arc.to_fips);
+              if (!from || !to) return null;
+              const [x1, y1] = from.centroid;
+              const [x2, y2] = to.centroid;
+              // Quadratic bezier with curve height proportional to distance.
+              const mx = (x1 + x2) / 2;
+              const my = (y1 + y2) / 2;
+              const dx = x2 - x1;
+              const dy = y2 - y1;
+              const dist = Math.sqrt(dx * dx + dy * dy);
+              const norm = dist === 0 ? 1 : dist;
+              const cx = mx - (dy / norm) * Math.min(80, dist * 0.35);
+              const cy = my + (dx / norm) * Math.min(80, dist * 0.35);
+              const path = `M${x1},${y1} Q${cx},${cy} ${x2},${y2}`;
+              const length = Math.round(dist * 1.5 + 200);
+              return (
+                <g key={arc.id}>
+                  <path
+                    d={path}
+                    fill="none"
+                    stroke="var(--color-emerald)"
+                    strokeOpacity={0.9}
+                    strokeWidth={1.4}
+                    strokeDasharray={`${length}`}
+                    strokeDashoffset={length}
+                  >
+                    <animate
+                      attributeName="stroke-dashoffset"
+                      from={length}
+                      to={0}
+                      dur="1.6s"
+                      fill="freeze"
+                    />
+                    <animate
+                      attributeName="stroke-opacity"
+                      values="0.9;0.9;0"
+                      keyTimes="0;0.6;1"
+                      dur="3s"
+                      fill="freeze"
+                    />
+                  </path>
+                  <circle r={3} fill="var(--color-emerald)">
+                    <animateMotion dur="1.6s" path={path} fill="freeze" />
+                    <animate
+                      attributeName="opacity"
+                      values="1;1;0"
+                      keyTimes="0;0.7;1"
+                      dur="2.6s"
+                      fill="freeze"
+                    />
+                  </circle>
+                </g>
+              );
+            })}
+          </g>
+        )}
       </svg>
     </div>
   );

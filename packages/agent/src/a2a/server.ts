@@ -23,6 +23,7 @@ import {
 import type { AgentConfig } from '../config.ts';
 import type { DataPlaneClient } from '../data-plane-client.ts';
 import type { SwapExecutor } from '../execute.ts';
+import type { ObserverTelemetry } from '../observer-client.ts';
 import type { Reasoner } from '../reason.ts';
 import type { AgentState } from '../state.ts';
 import { buildAgentCard } from './card.ts';
@@ -41,6 +42,7 @@ export function startA2aServer(
   systemPrompt?: string,
   swapExecutor?: SwapExecutor,
   dataPlane?: DataPlaneClient,
+  telemetry?: ObserverTelemetry,
 ): A2aServerHandle {
   const agentCard = buildAgentCard(cfg);
   const taskStore = new InMemoryTaskStore();
@@ -51,6 +53,7 @@ export function startA2aServer(
     systemPrompt,
     swapExecutor,
     dataPlane,
+    telemetry,
   );
   const requestHandler = new DefaultRequestHandler(agentCard, taskStore, executor);
   const transport = new JsonRpcTransportHandler(requestHandler);

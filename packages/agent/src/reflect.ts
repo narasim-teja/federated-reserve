@@ -44,6 +44,12 @@ export async function runReflection(deps: TickDeps): Promise<void> {
       log_entries_considered: recent.length,
     },
   });
+  deps.telemetry?.reportReflection({
+    state_fips: cfg.state.fips,
+    state_abbr: cfg.state.abbr,
+    summary,
+    tick: state.tickCount,
+  });
   console.log(`[${cfg.state.abbr}] reflection (tick ${state.tickCount}): ${summary}`);
 }
 

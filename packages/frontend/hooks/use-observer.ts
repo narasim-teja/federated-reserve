@@ -1,7 +1,15 @@
 'use client';
 
 import { useEffect, useReducer, useRef } from 'react';
-import type { ObserverEvent, Snapshot } from '@/lib/types';
+import type {
+  NegotiationRound,
+  NegotiationView,
+  ObserverEvent,
+  ReflectionEvent,
+  ShockEvent,
+  Snapshot,
+  SwapEvent,
+} from '@/lib/types';
 
 const HTTP_URL = process.env.NEXT_PUBLIC_OBSERVER_HTTP_URL ?? 'http://127.0.0.1:3001';
 const WS_URL = process.env.NEXT_PUBLIC_OBSERVER_WS_URL ?? 'ws://127.0.0.1:3001/ws';
@@ -19,12 +27,15 @@ interface State {
   lastUpdated: string | null;
   /** Monotonically increasing pulse counter — UI uses this to flash tiles. */
   pulseFor: Record<number, number>;
+  /** Live arc events: a queue of swaps to animate on the map. */
+  arcs: (SwapEvent & { id: number })[];
 }
 
 type Action =
   | { type: 'snapshot'; snapshot: Snapshot }
   | { type: 'event'; event: ObserverEvent }
-  | { type: 'connection'; connection: Connection };
+  | { type: 'connection'; connection: Connection }
+  | { type: 'arc-expire'; id: number };
 
 const INITIAL_STATE: State = {
   snapshot: null,
@@ -32,13 +43,86 @@ const INITIAL_STATE: State = {
   connection: 'idle',
   lastUpdated: null,
   pulseFor: {},
+  arcs: [],
 };
 
 function pulseFromEvent(event: ObserverEvent, current: Record<number, number>) {
-  const fips = (event.payload as { state_fips?: number } | null)?.state_fips;
+  const payload = event.payload as { state_fips?: number; from_fips?: number; to_fips?: number } | null;
+  const fips = payload?.state_fips ?? payload?.from_fips ?? payload?.to_fips;
   if (typeof fips !== 'number') return current;
   return { ...current, [fips]: (current[fips] ?? 0) + 1 };
 }
+
+function applyEventToSnapshot(snap: Snapshot | null, event: ObserverEvent): Snapshot | null {
+  if (!snap) return snap;
+  const next = snap;
+  if (event.kind === 'negotiation_round') {
+    const round = event.payload as NegotiationRound;
+    const negs = [...next.negotiations];
+    const idx = negs.findIndex((n) => n.task_id === round.task_id);
+    if (idx >= 0) {
+      const prev = negs[idx]!;
+      const updated: NegotiationView = {
+        ...prev,
+        rounds: [...prev.rounds, round],
+        last_at: round.emitted_at,
+        status:
+          round.stage === 'reject' || round.stage === 'coalition_decline'
+            ? 'rejected'
+            : round.stage === 'accept' || round.stage === 'settlement' || round.stage === 'coalition_join'
+              ? 'settled'
+              : prev.status,
+        participants: dedupe([
+          ...prev.participants,
+          round.from_fips,
+          ...(round.to_fips != null ? [round.to_fips] : []),
+        ]),
+      };
+      negs[idx] = updated;
+    } else {
+      negs.unshift({
+        task_id: round.task_id,
+        context_id: round.context_id ?? null,
+        skill: round.skill,
+        participants: dedupe([
+          round.from_fips,
+          ...(round.to_fips != null ? [round.to_fips] : []),
+        ]),
+        status:
+          round.stage === 'reject' || round.stage === 'coalition_decline'
+            ? 'rejected'
+            : round.stage === 'accept' || round.stage === 'settlement' || round.stage === 'coalition_join'
+              ? 'settled'
+              : 'open',
+        rounds: [round],
+        started_at: round.emitted_at,
+        last_at: round.emitted_at,
+      });
+    }
+    negs.sort((a, b) => b.last_at.localeCompare(a.last_at));
+    return { ...next, negotiations: negs.slice(0, 32) };
+  }
+  if (event.kind === 'swap_executed') {
+    const sw = event.payload as SwapEvent;
+    return { ...next, swaps: [sw, ...next.swaps].slice(0, 40) };
+  }
+  if (event.kind === 'shock_injected') {
+    const sh = event.payload as ShockEvent;
+    return { ...next, shocks: [sh, ...next.shocks].slice(0, 12) };
+  }
+  if (event.kind === 'reflection') {
+    const ref = event.payload as ReflectionEvent;
+    const others = next.reflections.filter((r) => r.state_fips !== ref.state_fips);
+    return { ...next, reflections: [ref, ...others].slice(0, 50) };
+  }
+  return next;
+}
+
+function dedupe<T>(values: T[]): T[] {
+  return [...new Set(values)];
+}
+
+let arcSeq = 0;
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -51,12 +135,23 @@ function reducer(state: State, action: Action): State {
       };
     case 'event': {
       const events = [action.event, ...state.events].slice(0, EVENT_BUFFER);
+      const snapshot = applyEventToSnapshot(state.snapshot, action.event);
+      let arcs = state.arcs;
+      if (action.event.kind === 'swap_executed') {
+        const sw = action.event.payload as SwapEvent;
+        arcs = [...state.arcs, { ...sw, id: ++arcSeq }];
+        if (arcs.length > 6) arcs = arcs.slice(-6);
+      }
       return {
         ...state,
         events,
+        snapshot,
+        arcs,
         pulseFor: pulseFromEvent(action.event, state.pulseFor),
       };
     }
+    case 'arc-expire':
+      return { ...state, arcs: state.arcs.filter((a) => a.id !== action.id) };
     case 'connection':
       return { ...state, connection: action.connection };
     default:
@@ -70,6 +165,8 @@ export interface UseObserverResult {
   connection: Connection;
   lastUpdated: string | null;
   pulseFor: Record<number, number>;
+  arcs: (SwapEvent & { id: number })[];
+  expireArc: (id: number) => void;
 }
 
 export function useObserver(): UseObserverResult {
@@ -135,5 +232,8 @@ export function useObserver(): UseObserverResult {
     };
   }, []);
 
-  return state;
+  return {
+    ...state,
+    expireArc: (id: number) => dispatchRef.current({ type: 'arc-expire', id }),
+  };
 }

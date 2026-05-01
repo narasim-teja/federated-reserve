@@ -48,6 +48,8 @@ export interface AgentConfig {
   };
   /** Shared data plane URL (defaults to local 127.0.0.1:3002). */
   dataPlaneUrl: string;
+  /** Observer telemetry base URL. Set to 'disabled' to no-op. */
+  observerHttpUrl: string;
   /** Tick interval in ms; production = 1hr, local dev usually shorter. */
   tickIntervalMs: number;
   /** Reflection runs every N ticks. Default 4. */
@@ -111,6 +113,7 @@ export function loadConfig(): AgentConfig {
       serverPort: readNumber('A2A_SERVER_PORT', 9004),
     },
     dataPlaneUrl: readString('DATA_PLANE_URL', 'http://127.0.0.1:3002'),
+    observerHttpUrl: readString('OBSERVER_HTTP_URL', 'http://127.0.0.1:3001'),
     tickIntervalMs: readNumber('TICK_INTERVAL_MS', 30_000),
     reflectEveryNTicks: readNumber('REFLECT_EVERY_N_TICKS', 4),
     reasoningEnabled,
