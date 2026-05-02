@@ -22,6 +22,8 @@
 
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { loadAgentKey } from '@federated-reserve/og-inft';
+import { OgStorageMemory } from './og-storage-memory.ts';
 import type { AgentState } from './state.ts';
 
 export type MemoryLogKind =
@@ -155,8 +157,17 @@ export class InMemoryMemory implements AgentMemory {
 // --------- Factory -----------------------------------------------------------
 
 /**
- * Pick a memory backend from env. Phase 2 only honors `local`; setting
- * `MEMORY_BACKEND=og` will throw until the 0G implementation lands.
+ * Pick a memory backend from env. Three options:
+ *
+ *   - `local` (default): file-backed at `<root>/memory/<abbr>/`.
+ *   - `memory`: in-process only (tests / CI).
+ *   - `og`: 0G Storage as durable substrate, with local-disk hot mirror.
+ *           Requires `OG_RPC_URL`, `OG_INDEXER_RPC`, and a signing key
+ *           (`OG_STORAGE_SIGNER_PK` or fallback to
+ *           `WALLET_<AGENT>_PRIVATE_KEY` / `WALLET_DEPLOYER_PRIVATE_KEY`).
+ *           If a per-agent symmetric key exists at
+ *           `<memory>/<abbr>/og-key.bin`, blobs are AES-256-GCM encrypted
+ *           with the same key the iNFT anchor pipeline uses.
  */
 export function makeMemory(opts: LocalDiskMemoryOptions): AgentMemory {
   const backend = (process.env.MEMORY_BACKEND ?? 'local').toLowerCase();
@@ -164,12 +175,51 @@ export function makeMemory(opts: LocalDiskMemoryOptions): AgentMemory {
     return new LocalDiskMemory(opts);
   }
   if (backend === 'og') {
-    throw new Error(
-      'MEMORY_BACKEND=og selected but OgStorageMemory is not implemented yet (Phase 5/6 — needs funded 0G testnet wallet). Use MEMORY_BACKEND=local for now.',
-    );
+    return makeOgStorageMemory(opts);
   }
   if (backend === 'memory') {
     return new InMemoryMemory();
   }
   throw new Error(`unknown MEMORY_BACKEND: ${backend} (expected local|og|memory)`);
+}
+
+function makeOgStorageMemory(opts: LocalDiskMemoryOptions): AgentMemory {
+  const rpcUrl = process.env.OG_RPC_URL;
+  const indexerUrl = process.env.OG_INDEXER_RPC;
+  if (!rpcUrl || !indexerUrl) {
+    throw new Error('MEMORY_BACKEND=og requires OG_RPC_URL and OG_INDEXER_RPC env vars');
+  }
+
+  // Pick a signing key. Per-agent wallets are preferable when present (0G
+  // storage txs use the agent's own funds, keeping the deployer faucet
+  // balance free for contract admin work). Fall back to deployer otherwise.
+  const agentEnvKey = opts.agentKey.toUpperCase();
+  const signerPk =
+    process.env.OG_STORAGE_SIGNER_PK ??
+    process.env[`WALLET_${agentEnvKey}_PRIVATE_KEY`] ??
+    process.env.WALLET_DEPLOYER_PRIVATE_KEY;
+  if (!signerPk || !signerPk.startsWith('0x') || signerPk === '0xPLACEHOLDER') {
+    throw new Error(
+      `MEMORY_BACKEND=og requires a signing key (OG_STORAGE_SIGNER_PK or WALLET_${agentEnvKey}_PRIVATE_KEY or WALLET_DEPLOYER_PRIVATE_KEY)`,
+    );
+  }
+
+  // Optional: encrypt blobs under the same per-agent symmetric key the
+  // iNFT bundles use. When absent, plaintext JSON.
+  const memoryRoot = opts.rootDir ?? process.env.MEMORY_ROOT ?? `${process.cwd()}/memory`;
+  const keyPath = resolve(memoryRoot, opts.agentKey, 'og-key.bin');
+  let symmetricKey: Uint8Array | undefined;
+  try {
+    symmetricKey = loadAgentKey(keyPath);
+  } catch {
+    symmetricKey = undefined;
+  }
+
+  return new OgStorageMemory({
+    agentKey: opts.agentKey,
+    rootDir: opts.rootDir,
+    ogConfig: { rpcUrl, indexerUrl },
+    signerPrivateKey: signerPk as `0x${string}`,
+    symmetricKey,
+  });
 }

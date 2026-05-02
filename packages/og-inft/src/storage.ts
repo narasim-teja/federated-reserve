@@ -6,7 +6,7 @@
  */
 
 import { Indexer, MemData } from '@0gfoundation/0g-storage-ts-sdk';
-import { JsonRpcProvider, Wallet } from 'ethers';
+import { JsonRpcProvider, NonceManager, Wallet } from 'ethers';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,13 +26,21 @@ export interface UploadResult {
 
 export class OgStorage {
   private indexer: Indexer;
-  private signer: Wallet;
+  /**
+   * NonceManager-wrapped Wallet so back-to-back uploads from the same wallet
+   * don't race on RPC-side nonce sync. The 0G testnet RPC takes 5-15s to
+   * reflect a freshly-submitted tx in `getNonce("pending")`; without the
+   * manager, ethers re-fetches and reuses the same nonce → tx 2 rejects as
+   * REPLACEMENT_UNDERPRICED. NonceManager increments locally on each
+   * sendTransaction so subsequent calls deterministically use N+1.
+   */
+  private signer: NonceManager;
   private rpcUrl: string;
 
   constructor(cfg: OgStorageConfig) {
     this.rpcUrl = cfg.rpcUrl;
     const provider = new JsonRpcProvider(cfg.rpcUrl);
-    this.signer = new Wallet(cfg.privateKey, provider);
+    this.signer = new NonceManager(new Wallet(cfg.privateKey, provider));
     this.indexer = new Indexer(cfg.indexerUrl);
   }
 
