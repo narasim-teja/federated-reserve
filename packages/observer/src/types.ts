@@ -132,7 +132,7 @@ export interface InftManifestEntry {
   state_name: string;
   owner_address: string;
   token_id: number | null;
-  mint_status: 'pending_0g' | 'minted';
+  mint_status: 'pending_0g' | 'minted' | 'partial';
   metadata_uri: string;
   metadata_hash: string;
   persona_tagline: string;
@@ -148,11 +148,25 @@ export interface InftManifestEntry {
     address: string;
     explorer_url: string;
   };
+  /** Populated only when mint_status === 'minted'. */
+  onchain?: {
+    mint_tx: string;
+    mint_tx_url: string;
+    storage_root_hash: string;
+    storage_blob_url: string;
+    encrypted_bytes: number;
+    minted_at: string;
+  } | null;
 }
 
 export interface InftManifest {
   generated_at: string;
-  mint_status: 'pending_0g';
+  mint_status: 'pending_0g' | 'minted' | 'partial';
+  contract_address?: string;
+  contract_explorer_url?: string;
+  chain?: string;
+  chain_id?: number;
+  minted?: number;
   entries: InftManifestEntry[];
 }
 

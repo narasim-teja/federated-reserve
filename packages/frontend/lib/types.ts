@@ -64,6 +64,14 @@ export interface InftEntry {
   metadata_hash: string;
   persona_tagline: string;
   contract: { chain: string; address: string; explorer_url: string };
+  onchain?: {
+    mint_tx: string;
+    mint_tx_url: string;
+    storage_root_hash: string;
+    storage_blob_url: string;
+    encrypted_bytes: number;
+    minted_at: string;
+  } | null;
 }
 
 export interface FedRateHistoryEntry {

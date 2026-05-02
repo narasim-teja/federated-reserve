@@ -27,6 +27,7 @@ import { SwapExecutor } from './execute.ts';
 import { McpRouterClient } from './mcp-router-client.ts';
 import { makeMcpRequestHandler } from './mcp/server.ts';
 import { makeMemory } from './memory.ts';
+import { maybeWrapWithOgAnchor } from './og-anchor-bootstrap.ts';
 import { ObserverTelemetry } from './observer-client.ts';
 import { type Reasoner, getReasoner } from './reason.ts';
 import { makeInitialState } from './state.ts';
@@ -36,7 +37,11 @@ import { startTickLoop } from './tick.ts';
 const cfg = loadConfig();
 const persona = getPersona(cfg.state.abbr);
 const systemPrompt = buildAgentSystemPrompt(cfg.state, persona);
-const memory = makeMemory({ agentKey: cfg.state.abbr.toLowerCase() });
+const memory = maybeWrapWithOgAnchor(
+  makeMemory({ agentKey: cfg.state.abbr.toLowerCase() }),
+  cfg.state,
+  persona,
+);
 
 // Hydrate state from prior run if present.
 const persisted = await memory.loadState();

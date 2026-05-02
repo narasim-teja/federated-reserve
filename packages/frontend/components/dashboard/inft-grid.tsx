@@ -52,6 +52,12 @@ export function InftGrid({ entries }: InftGridProps) {
                     <dd className="truncate text-[var(--color-fg)]">
                       {compactAddress(entry.owner_address)}
                     </dd>
+                    {entry.token_id != null && (
+                      <>
+                        <dt className="text-[var(--color-fg-subtle)]">token</dt>
+                        <dd className="truncate text-[var(--color-fg)]">#{entry.token_id}</dd>
+                      </>
+                    )}
                     <dt className="text-[var(--color-fg-subtle)]">hash</dt>
                     <dd className="truncate text-[var(--color-fg)]">
                       {compactHash(entry.metadata_hash)}
@@ -70,6 +76,38 @@ export function InftGrid({ entries }: InftGridProps) {
                         </a>
                       )}
                     </dd>
+                    {entry.onchain?.mint_tx_url && (
+                      <>
+                        <dt className="text-[var(--color-fg-subtle)]">mint</dt>
+                        <dd className="truncate text-[var(--color-fg)]">
+                          <a
+                            href={entry.onchain.mint_tx_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[var(--color-cyan)] hover:underline inline-flex items-center gap-1"
+                          >
+                            {compactHash(entry.onchain.mint_tx)}
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        </dd>
+                      </>
+                    )}
+                    {entry.onchain?.storage_blob_url && (
+                      <>
+                        <dt className="text-[var(--color-fg-subtle)]">0G blob</dt>
+                        <dd className="truncate text-[var(--color-fg)]">
+                          <a
+                            href={entry.onchain.storage_blob_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[var(--color-cyan)] hover:underline inline-flex items-center gap-1"
+                          >
+                            {compactHash(entry.onchain.storage_root_hash)}
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        </dd>
+                      </>
+                    )}
                   </dl>
                 </li>
               );

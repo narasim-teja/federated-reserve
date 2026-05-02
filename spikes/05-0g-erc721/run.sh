@@ -54,7 +54,9 @@ DEPLOY_OUT=$(forge create \
   --json 2>&1)
 
 echo "$DEPLOY_OUT"
-ADDR_DEPLOYED=$(echo "$DEPLOY_OUT" | python3 -c 'import sys,json; print(json.loads([l for l in sys.stdin if l.strip().startswith("{")][0]).get("deployedTo",""))' 2>/dev/null || true)
+# forge --json now emits the JSON over multiple lines; collect the full block, then parse.
+ADDR_DEPLOYED=$(echo "$DEPLOY_OUT" \
+  | python3 -c 'import sys,json,re; t=sys.stdin.read(); m=re.search(r"\{[^{}]*\"deployedTo\"[^{}]*\}", t, re.S); print(json.loads(m.group(0))["deployedTo"] if m else "")' 2>/dev/null || true)
 
 if [[ -z "$ADDR_DEPLOYED" || "$ADDR_DEPLOYED" == "null" ]]; then
   echo "[spike-05] FAIL: could not parse deployedTo from forge output"

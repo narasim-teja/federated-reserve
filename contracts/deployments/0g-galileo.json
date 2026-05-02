@@ -1,0 +1,141 @@
+{
+  "chain": "0g-galileo",
+  "chainId": 16602,
+  "rpc": "https://evmrpc-testnet.0g.ai",
+  "explorer": "https://chainscan-galileo.0g.ai",
+  "deployer": "0xB3B3b1F641295D57648B277737d67B1374071713",
+  "deployedAt": "2026-05-01T22:15:33.962Z",
+  "contracts": {
+    "MockOracle": {
+      "address": "0xdad62bba075bc0193551c91cc5db79e558e5e5db",
+      "deployTx": "0xfa66b4698b87d388e29b9c3f2eb71ac08dc1b40d5ac6a97488039b696655c32f"
+    },
+    "INFT7857": {
+      "address": "0xbae646e0092a74821c54ea36ea342eefb6a26ae1",
+      "oracle": "0xdad62bba075bc0193551c91cc5db79e558e5e5db",
+      "deployTx": "0x153b1b234d708911e6114a00eb829644af343ec70ab314d255941365b02646d1"
+    }
+  },
+  "iNFTs": {
+    "AK": {
+      "tokenId": "2",
+      "state_abbr": "AK",
+      "state_name": "Alaska",
+      "state_fips": 2,
+      "owner_address": "0xf79182429761F6Bd5D1CabF263F448AE2bdea889",
+      "encrypted_uri": "0g://30932129bb77c2c9c6459c30f5d96134b4032456622944678ff55b100caf5251",
+      "root_hash": "0x30932129bb77c2c9c6459c30f5d96134b4032456622944678ff55b100caf5251",
+      "metadata_hash": "0x4ac055cfcfc98b99f2ccd9a51e689dc70de5c18d842418d942d4a12498c76777",
+      "sealed_key": "0x049d5bc9da4df7b82854b2ed41f8593bb7e2a62256e43e2a16490b7d73b5a6730ec6fc36a9418da20749685a3d64f37ac10e2bf32ceabdd1f2338460a1cea442a46ad6655815023b761df9c502fdf18c3b38bb76b48affcfe70467969f255d97302a240db657ab367192dcf05b4a8fdb1e7886cc1451e2e14b7e9471d1",
+      "mint_tx": "0xe06d76dc76416f9a771ce2a3dc5abdc12f2443a36cd9f7a3a250fb717a57db75",
+      "bundle_bytes": 63463,
+      "encrypted_bytes": 63491,
+      "minted_at": "2026-05-01T22:15:51.868Z"
+    },
+    "CA": {
+      "tokenId": "6",
+      "state_abbr": "CA",
+      "state_name": "California",
+      "state_fips": 6,
+      "owner_address": "0xd842DEB4dbD49DD5e349a6959d8F6ee179726249",
+      "encrypted_uri": "0g://b3160602217aaff604e4bec0850e8b6a6c82ffe8e59a092c87b64a0ed7151746",
+      "root_hash": "0xb3160602217aaff604e4bec0850e8b6a6c82ffe8e59a092c87b64a0ed7151746",
+      "metadata_hash": "0x055652c8248d213ea36f940fc7823f7eaad8a7ed67687bfe66c3c5925b43ecb0",
+      "sealed_key": "0x04d867df45ee6d6193d068af0477bab596d0ecdecd6889487707d10206aa728de460eeae105c393dfc9cbe7d10fcacdb94eee45926c72703703eba692a1dc957794ac41efec8aa868eed219f4bee817824f14db78ef5fb0d65b0bd941f0a45b5aa091d18ce35c0aca4c39f6a4b4ba8d0ae57aa92d68d8d62fcce957ade",
+      "mint_tx": "0xe60ae9139f61caf848a99e947114eaee1024163e9bf19cbbab7e221eabd2f31a",
+      "bundle_bytes": 63378,
+      "encrypted_bytes": 63406,
+      "minted_at": "2026-05-01T22:16:10.271Z"
+    },
+    "FL": {
+      "tokenId": "12",
+      "state_abbr": "FL",
+      "state_name": "Florida",
+      "state_fips": 12,
+      "owner_address": "0x210b16F6516278Ce9decE09664FF3225E2fF0aa2",
+      "encrypted_uri": "0g://bf8942b50bbf6fd44a130086b3dbcfe32baab90587db1d1002a75acf1a6d2235",
+      "root_hash": "0xbf8942b50bbf6fd44a130086b3dbcfe32baab90587db1d1002a75acf1a6d2235",
+      "metadata_hash": "0x9e087b36ef587e6d001996793cc70ea74582af87ce813082cff23559fd7b79de",
+      "sealed_key": "0x04fec6e6b437208a4681230d203f0530b54922111d7a109cb9f943d8c90000dad7bc133570e417c3d8627c958893fe12c67c48de2dc12f2859d7f43bc87fc6d5cb25ca31d4be4ee332c551754d5ac886b41e25a5803ad4c791f249f0a57a03d613e18fa5e2326b29a7f707589b8ed8c85cc4dc1fffae4c5d7f40186487",
+      "mint_tx": "0xdb9772c9dd9d79c7dcdb5d8f6be89e3c4cad0587c157d7638b1692e142e05057",
+      "bundle_bytes": 63705,
+      "encrypted_bytes": 63733,
+      "minted_at": "2026-05-01T22:16:28.865Z"
+    },
+    "IL": {
+      "tokenId": "17",
+      "state_abbr": "IL",
+      "state_name": "Illinois",
+      "state_fips": 17,
+      "owner_address": "0xFF09b3C7DDCf9b04B99dFcFE5818E9A2526F6088",
+      "encrypted_uri": "0g://726a6130f39b00a1df7a028adb3d3128e0c053988e1492c3d5e12ffa6eaa1a31",
+      "root_hash": "0x726a6130f39b00a1df7a028adb3d3128e0c053988e1492c3d5e12ffa6eaa1a31",
+      "metadata_hash": "0x30f4269f0a06838cec3811f0a34e539b5bebd571fe71823b6654b25553a3c583",
+      "sealed_key": "0x0438642eec20fa9e1b6e3e8320443ee54534d03277e21ac1de827a180a5643645ba9a5d97866fe05a7bf79a23699a0e8507c55135aa3b59f6768e840de406cf8fe61959ffe9c5790fde382c11234f2c755b5e8c23029582785e3eb958578283e38a0a966b2b8b1c5762207b1cc863b2d9967976fc1dcd42780547e3f66",
+      "mint_tx": "0x25389301c5dbf19186c7405bb1220d9e39038da431be5f3cfd2c1ecb2c1ab9ae",
+      "bundle_bytes": 63443,
+      "encrypted_bytes": 63471,
+      "minted_at": "2026-05-01T22:16:46.147Z"
+    },
+    "MA": {
+      "tokenId": "25",
+      "state_abbr": "MA",
+      "state_name": "Massachusetts",
+      "state_fips": 25,
+      "owner_address": "0x2926E2afC40a62829960C002eEe8F54eb4cEAC88",
+      "encrypted_uri": "0g://7ff5801e52b20a53a3533b3b2abc393298f7ea00918b298bb619979bf5dddf57",
+      "root_hash": "0x7ff5801e52b20a53a3533b3b2abc393298f7ea00918b298bb619979bf5dddf57",
+      "metadata_hash": "0x9e9d695eae62a28ef0b0e093988af694ab43b5c30948c0430f797dae5287916e",
+      "sealed_key": "0x04590ce91742845145d4c7a6543cb9d983666739d6e360b257cc9d3c7cf0a353b58f434aad7ebf0c6dc30c3546003e4659e5aa72843b7c20357879c35a723852fe9db9304e13075bfcafbbee39a22bde75ce462f0f4242ee53692ecbe5e1ab86234b3948dffa6513c1e7dca2d0786d10182efa6dd970ddaedf7bbd58ef",
+      "mint_tx": "0x7cc984d814562b6c3a702289d3f25a526d86e0dfd5605a98bbf6e456950234e3",
+      "bundle_bytes": 61302,
+      "encrypted_bytes": 61330,
+      "minted_at": "2026-05-01T22:17:03.367Z"
+    },
+    "NY": {
+      "tokenId": "36",
+      "state_abbr": "NY",
+      "state_name": "New York",
+      "state_fips": 36,
+      "owner_address": "0x35755018070DE86339C00c04304C5D74408D700C",
+      "encrypted_uri": "0g://de758d4fc5b109728c248450846355f3e440847988a6fd34cb5faada70440a7a",
+      "root_hash": "0xde758d4fc5b109728c248450846355f3e440847988a6fd34cb5faada70440a7a",
+      "metadata_hash": "0xb4d425f1bc0945e8832578444e4efdb859ab08fcf1360e419459307c05748019",
+      "sealed_key": "0x041f6a884833040650421026d7ab68c350513e9e2ac89843540445a445d9fc9878b0d5bfdc942bc69bfec3d8160fd2ad000d1247d9c0d2fef99a1a38c81975636038fe78f0508e93fb8e6b209a215bf0a096f6e594fc68e3c75f2f3833d72496f37750bad65d072f5790e4e3d0ff05d9797ec6bd7ccdd1a4fd264a82a5",
+      "mint_tx": "0x56227bb0ee075a8e918cf50184bcb98af2c316e70b9bb206af3d3393bb2a4aa0",
+      "bundle_bytes": 63504,
+      "encrypted_bytes": 63532,
+      "minted_at": "2026-05-01T22:17:22.414Z"
+    },
+    "TX": {
+      "tokenId": "48",
+      "state_abbr": "TX",
+      "state_name": "Texas",
+      "state_fips": 48,
+      "owner_address": "0x6966b648c8F9F1B1Be96b4A89381651a0020cE8c",
+      "encrypted_uri": "0g://eba48fdbe3a08bb216974ff85cc451d700bc58d1a8c4836572c6e231279ba105",
+      "root_hash": "0xeba48fdbe3a08bb216974ff85cc451d700bc58d1a8c4836572c6e231279ba105",
+      "metadata_hash": "0x0da30b65cc404d788ef64467cd91fa4b2f59d88e8377af8e5666c305d88ee06b",
+      "sealed_key": "0x04dc8ae526285cf1b11501be50bab9bd808d4e794486f6625889b6e20ad2114af0504426b1b0e7bf71f9f2ba48aca8b354e7b90dd05e4c1658c61d709210c941ca72193d4fff951a28ae0053af1b2b17bd30b37ee3852f17a81bc1a3daa5fed4216d9b6e157b42b13d72114a1d0a3f301bb59d778d270f2aacb86ccc19",
+      "mint_tx": "0x0769541d18f9ccdd3e9266e0a8dc8e90f85c092d3b599884eed8e91377a0c202",
+      "bundle_bytes": 63398,
+      "encrypted_bytes": 63426,
+      "minted_at": "2026-05-01T22:17:39.609Z"
+    },
+    "WA": {
+      "tokenId": "53",
+      "state_abbr": "WA",
+      "state_name": "Washington",
+      "state_fips": 53,
+      "owner_address": "0x1cb0C85d73058370C03d1f7cf29488Ffe3Eb2f52",
+      "encrypted_uri": "0g://ffd73293d87677a5ea963402656551075715383b7607c24acc5406e845a8e96a",
+      "root_hash": "0xffd73293d87677a5ea963402656551075715383b7607c24acc5406e845a8e96a",
+      "metadata_hash": "0xa1f1c516da21df2a30046816b38041fd67334b42afc47f2ffff1a72a1063d121",
+      "sealed_key": "0x04cdf952dfa08e83450044edf32295737fabc0a8a4fb351ca406f6f8d51d76e68e9cbfb7815aabea1593b943fd4e2f9d664e14e7c6c802357ed3515a5a046bbc04c3248ecbb2a830d69d99474c21ba0438c533a7bc19ccbf271572beca69e9051412228c7a20c772d4edb5d0e09e84773e2ae97c0e8bae9c071b9780f4",
+      "mint_tx": "0xab17860468bf115a4619f98c2b1bc9eba90b9d424125c93aea0cb6bb34f1ddee",
+      "bundle_bytes": 63170,
+      "encrypted_bytes": 63198,
+      "minted_at": "2026-05-01T22:17:52.041Z"
+    }
+  }
+}

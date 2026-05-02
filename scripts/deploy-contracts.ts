@@ -182,6 +182,7 @@ async function send(
 const mockUsdcArtifact = loadArtifact('MockUSDC');
 const stateTokenArtifact = loadArtifact('StateToken');
 const inftArtifact = loadArtifact('INFT7857');
+const mockOracleArtifact = loadArtifact('MockOracle');
 
 console.log('[deploy] step 1: MockUSDC');
 const usdcAddr = await deploy('MockUSDC', mockUsdcArtifact.abi, mockUsdcArtifact.bytecode.object);
@@ -198,9 +199,17 @@ for (const s of STATES) {
   stateTokens[s.abbr] = { address: addr, agent: stateWalletAddress(s.abbr) };
 }
 
-console.log('[deploy] step 3: INFT7857');
+console.log('[deploy] step 3a: MockOracle');
+const oracleAddr = await deploy(
+  'MockOracle',
+  mockOracleArtifact.abi,
+  mockOracleArtifact.bytecode.object,
+);
+
+console.log('[deploy] step 3b: INFT7857');
 const inftAddr = await deploy('INFT7857', inftArtifact.abi, inftArtifact.bytecode.object, [
   deployer.address,
+  oracleAddr,
 ]);
 
 console.log('[deploy] step 4: mint USDC to state wallets');
@@ -246,7 +255,8 @@ const deployments = {
         },
       ]),
     ),
-    INFT7857: { address: inftAddr },
+    INFT7857: { address: inftAddr, oracle: oracleAddr },
+    MockOracle: { address: oracleAddr },
   },
   reserves: {
     perPoolUsdc: USDC_LP_RESERVE_PER_POOL.toString(),

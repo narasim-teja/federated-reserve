@@ -1,0 +1,10 @@
+{
+  "rootHash": "0x7f441bbeea42ac9830f4ad05a962508d54785569e5b6f499da98d46a9b871f20",
+  "txHash": "0x844bf542a5ec8d480e8b95015be52e885275b7cf611dd3f4b4eda381dcfed1c8",
+  "payload": {
+    "hello": "0G",
+    "ts": "2026-05-01T21:41:38.417Z",
+    "spike": "08"
+  },
+  "at": "2026-05-01T21:41:46.289Z"
+}

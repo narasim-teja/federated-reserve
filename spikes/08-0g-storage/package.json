@@ -1,0 +1,16 @@
+{
+  "name": "spike-08-0g-storage",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "smoke": "bun run smoke.ts"
+  },
+  "dependencies": {
+    "@0gfoundation/0g-storage-ts-sdk": "1.2.8",
+    "ethers": "^6.15.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}

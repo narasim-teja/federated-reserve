@@ -65,11 +65,60 @@ function sha256(value: unknown): string {
 
 loadEnv();
 
-const deployments = loadDeployments('unichain-sepolia');
+// 0G Galileo deployments — written by `scripts/deploy-0g.ts` and updated by
+// `scripts/mint-inft.ts` with per-state minted iNFT records.
+interface OgDeploymentsFile {
+  chain?: string;
+  chainId?: number;
+  contracts?: { INFT7857?: { address?: string } };
+  iNFTs?: Record<string, OgMintRecord>;
+}
+interface OgMintRecord {
+  tokenId: string;
+  state_abbr: string;
+  state_name: string;
+  owner_address: string;
+  encrypted_uri: string;
+  root_hash: string;
+  metadata_hash: string;
+  mint_tx: string;
+  bundle_bytes: number;
+  encrypted_bytes: number;
+  minted_at: string;
+}
+const OG_DEPLOYMENTS_PATH = join(ROOT, 'contracts', 'deployments', '0g-galileo.json');
+const ogDeployments: OgDeploymentsFile = (() => {
+  try {
+    return JSON.parse(readFileSync(OG_DEPLOYMENTS_PATH, 'utf8')) as OgDeploymentsFile;
+  } catch {
+    return {};
+  }
+})();
+const ogMints = ogDeployments.iNFTs ?? {};
+
+// Fall back to the legacy unichain deployment file only if 0G hasn't shipped yet.
+const fallbackDeployments = (() => {
+  try {
+    return loadDeployments('unichain-sepolia');
+  } catch {
+    return null;
+  }
+})();
 const inftAddress =
-  process.env.OG_INFT7857_ADDRESS ?? deployments.contracts.INFT7857?.address ?? 'pending_0g_deploy';
-const chainId = Number(process.env.OG_CHAIN_ID ?? 16601);
-const chain = '0g-testnet';
+  process.env.OG_INFT7857_ADDRESS
+  ?? ogDeployments.contracts?.INFT7857?.address
+  ?? fallbackDeployments?.contracts.INFT7857?.address
+  ?? 'pending_0g_deploy';
+const chainId = Number(process.env.OG_CHAIN_ID ?? ogDeployments.chainId ?? 16602);
+const chain = ogDeployments.chain ?? '0g-galileo';
+const explorerBase = (process.env.OG_EXPLORER_BASE_URL ?? 'https://chainscan-galileo.0g.ai').replace(
+  /\/$/,
+  '',
+);
+const storageExplorerBase = (process.env.OG_STORAGE_EXPLORER_BASE_URL ?? 'https://storagescan-galileo.0g.ai').replace(
+  /\/$/,
+  '',
+);
 
 const entries = [];
 for (const state of STATES.filter((s) => s.tier === 'deep')) {
@@ -86,19 +135,29 @@ for (const state of STATES.filter((s) => s.tier === 'deep')) {
     recent_log: logEntries,
     generated_at: new Date().toISOString(),
   };
-  const metadataHash = sha256(metadata);
-  const ownerAddress =
+  const fallbackHash = sha256(metadata);
+  const fallbackOwner =
     process.env[`WALLET_${state.abbr}_ADDRESS`] ??
-    deployments.contracts.StateTokens?.[state.abbr]?.agent ??
+    fallbackDeployments?.contracts.StateTokens?.[state.abbr]?.agent ??
     '';
+  const minted = ogMints[state.abbr];
+  const isMinted = !!minted;
+  const tokenIdNum = minted ? Number(minted.tokenId) : null;
+  const ownerAddress = minted?.owner_address ?? fallbackOwner;
+  const metadataUri = minted?.encrypted_uri ?? `0g://pending/${state.abbr.toLowerCase()}/${fallbackHash}`;
+  const metadataHash = minted?.metadata_hash ?? fallbackHash;
+  const tokenExplorerUrl = inftAddress.startsWith('0x') ? `${explorerBase}/address/${inftAddress}` : '';
+  const mintTxUrl = minted?.mint_tx ? `${explorerBase}/tx/${minted.mint_tx}` : '';
+  const storageBlobUrl = minted?.root_hash ? `${storageExplorerBase}/tx/${minted.root_hash}` : '';
+
   entries.push({
     state_fips: state.fips,
     state_abbr: state.abbr,
     state_name: state.name,
     owner_address: ownerAddress,
-    token_id: null,
-    mint_status: 'pending_0g',
-    metadata_uri: `0g://pending/${state.abbr.toLowerCase()}/${metadataHash}`,
+    token_id: tokenIdNum,
+    mint_status: isMinted ? 'minted' : 'pending_0g',
+    metadata_uri: metadataUri,
     metadata_hash: metadataHash,
     persona_tagline: persona.tagline,
     memory_proof: {
@@ -111,17 +170,34 @@ for (const state of STATES.filter((s) => s.tier === 'deep')) {
       chain,
       chain_id: chainId,
       address: inftAddress,
-      explorer_url:
-        inftAddress.startsWith('0x') && process.env.OG_EXPLORER_BASE_URL
-          ? `${process.env.OG_EXPLORER_BASE_URL.replace(/\/$/, '')}/address/${inftAddress}`
-          : '',
+      explorer_url: tokenExplorerUrl,
     },
+    onchain: isMinted
+      ? {
+          mint_tx: minted!.mint_tx,
+          mint_tx_url: mintTxUrl,
+          storage_root_hash: minted!.root_hash,
+          storage_blob_url: storageBlobUrl,
+          encrypted_bytes: minted!.encrypted_bytes,
+          minted_at: minted!.minted_at,
+        }
+      : null,
   });
 }
 
+const mintedCount = entries.filter((e) => e.mint_status === 'minted').length;
 const manifest = {
   generated_at: new Date().toISOString(),
-  mint_status: 'pending_0g',
+  mint_status: mintedCount === entries.length && entries.length > 0
+    ? 'minted'
+    : mintedCount > 0
+      ? 'partial'
+      : 'pending_0g',
+  contract_address: inftAddress,
+  contract_explorer_url: inftAddress.startsWith('0x') ? `${explorerBase}/address/${inftAddress}` : '',
+  chain,
+  chain_id: chainId,
+  minted: mintedCount,
   entries,
 };
 
