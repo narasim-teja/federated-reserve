@@ -38,6 +38,13 @@ export interface ReasoningRequest {
   temperature?: number;
   /** Per-call max tokens override (rare — preset usually authoritative). */
   maxTokens?: number;
+  /**
+   * Mark the system prompt as a cacheable block (OpenRouter `cache_control:
+   * ephemeral`). Cheap on Anthropic + Gemini providers — cached reads run
+   * 5-10x cheaper than fresh input. Default true; opt out only if the call
+   * site has a non-stable system prompt.
+   */
+  cacheSystem?: boolean;
   /** Abort signal so callers can cancel. */
   signal?: AbortSignal;
 }
@@ -46,8 +53,8 @@ export interface ReasoningResponse {
   text: string;
   /** Raw OpenRouter response for debugging. */
   raw: unknown;
-  /** Token usage when reported. */
-  usage?: { prompt: number; completion: number; total: number };
+  /** Token usage when reported. `cached` reflects prompt-cache hits when the provider reports them. */
+  usage?: { prompt: number; completion: number; total: number; cached?: number };
   /** Preset slug actually invoked (post-normalization). */
   presetUsed: string;
   /** Resolved model OpenRouter says it served (preset-bound or override). */
@@ -108,7 +115,17 @@ interface OpenRouterChoice {
 interface OpenRouterResponse {
   choices?: OpenRouterChoice[];
   model?: string;
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    /** Anthropic-style: tokens read from cache (discounted). */
+    cache_read_input_tokens?: number;
+    /** Anthropic-style: tokens written to cache on this call. */
+    cache_creation_input_tokens?: number;
+    /** OpenAI/Gemini-style: nested cached count. */
+    prompt_tokens_details?: { cached_tokens?: number };
+  };
 }
 
 const DEFAULT_RETRY_DELAYS_MS = [500, 1500, 4000] as const;
@@ -155,9 +172,25 @@ export class Reasoner {
     const preset = this.presetForTier(req.tier);
     const t0 = performance.now();
 
-    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
-      { role: 'system', content: req.system },
-      ...req.messages,
+    // Default ON: every callsite we have today (reflection, swap negotiation,
+    // bond auction, aid, shock, fed-rate, MCP) ships a static system prompt
+    // baked at startup. Cache hits cost a fraction of fresh input tokens.
+    const cacheSystem = req.cacheSystem ?? true;
+    type ContentPart = {
+      type: 'text';
+      text: string;
+      cache_control?: { type: 'ephemeral' };
+    };
+    type Message = {
+      role: 'system' | 'user' | 'assistant';
+      content: string | ContentPart[];
+    };
+    const systemContent: ContentPart[] | string = cacheSystem
+      ? [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }]
+      : req.system;
+    const messages: Message[] = [
+      { role: 'system', content: systemContent },
+      ...req.messages.map<Message>((m) => ({ role: m.role, content: m.content })),
     ];
     const body: Record<string, unknown> = {
       model: preset,
@@ -200,6 +233,10 @@ export class Reasoner {
     }
 
     const latencyMs = Math.round(performance.now() - t0);
+    const cachedTokens =
+      parsed.usage?.cache_read_input_tokens ??
+      parsed.usage?.prompt_tokens_details?.cached_tokens ??
+      undefined;
     return {
       text: completion,
       raw: parsed,
@@ -208,6 +245,7 @@ export class Reasoner {
             prompt: parsed.usage.prompt_tokens ?? 0,
             completion: parsed.usage.completion_tokens ?? 0,
             total: parsed.usage.total_tokens ?? 0,
+            ...(cachedTokens !== undefined ? { cached: cachedTokens } : {}),
           }
         : undefined,
       presetUsed: preset,
@@ -224,6 +262,7 @@ export class Reasoner {
     value: T;
     response: ReasoningResponse;
   }> {
+    // cacheSystem flows through verbatim; default ON inside `reason`.
     const response = await this.reason({ ...req, responseFormat: 'json_object' });
     try {
       return { value: JSON.parse(response.text) as T, response };

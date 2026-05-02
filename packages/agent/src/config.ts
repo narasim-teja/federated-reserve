@@ -115,7 +115,7 @@ export function loadConfig(): AgentConfig {
     dataPlaneUrl: readString('DATA_PLANE_URL', 'http://127.0.0.1:3002'),
     observerHttpUrl: readString('OBSERVER_HTTP_URL', 'http://127.0.0.1:3001'),
     tickIntervalMs: readNumber('TICK_INTERVAL_MS', 30_000),
-    reflectEveryNTicks: readNumber('REFLECT_EVERY_N_TICKS', 4),
+    reflectEveryNTicks: readNumber('REFLECT_EVERY_N_TICKS', 8),
     reasoningEnabled,
     bondAuction: {
       windowMs: readNumber('BOND_AUCTION_WINDOW_MS', 8_000),

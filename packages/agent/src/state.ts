@@ -37,6 +37,14 @@ export interface AgentState {
   tickCount: number;
   /** Phase 4 — most recent fed rate announcements received from FED. Bounded. */
   receivedFedRates?: FedRateRecord[];
+  /**
+   * Cost-optimization hash. Set after each successful reflection LLM call to
+   * a digest of the inputs (recent log + tick + reserve). On the next
+   * reflection cadence, if the hash is identical we skip the LLM round-trip
+   * and emit a "unchanged" stub instead — most idle ticks produce no new
+   * information worth re-reflecting on.
+   */
+  lastReflectionHash?: string;
 }
 
 const RECEIVED_INDICATORS_CAP = 200;
