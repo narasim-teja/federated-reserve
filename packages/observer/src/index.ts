@@ -146,7 +146,7 @@ await router.waitReady();
 const mcpEndpoint = `http://127.0.0.1:${mcpPort}/mcp`;
 const handleMcp = makeMcpRequestHandler();
 const mcpServer = Bun.serve({
-  hostname: '127.0.0.1',
+  hostname: process.env.OBSERVER_BIND ?? '0.0.0.0',
   port: mcpPort,
   fetch: async (req) => {
     const url = new URL(req.url);
@@ -188,7 +188,7 @@ const unsubscribe = store.subscribe((event: ObserverEvent) => {
 });
 
 const httpServer = Bun.serve({
-  hostname: '127.0.0.1',
+  hostname: process.env.OBSERVER_BIND ?? '0.0.0.0',
   port: httpPort,
   websocket: {
     open(ws) {

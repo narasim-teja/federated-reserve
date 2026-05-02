@@ -1,0 +1,140 @@
+# Federated Reserve agent — single-container image.
+#
+# Contains:
+#   - AXL Go binary (built from vendor/axl)
+#   - Python 3.12 + AXL Python integrations (MCP router sidecar)
+#   - Bun runtime + the @federated-reserve workspace (agent + dependencies)
+#   - Entrypoint script that boots all three processes in order
+#
+# At runtime each container is one agent (one US state, FED, or TRS) with its
+# own ed25519 key, AXL config, wallet, and (when MEMORY_BACKEND=og) iNFT
+# symmetric key. State persists to 0G Storage via OgStorageMemory; the local
+# memory/<abbr>/ dir is an ephemeral hot mirror.
+#
+# Build:
+#   docker build -f docker/Dockerfile.agent -t federated-reserve/agent:latest .
+#
+# Run (single agent, see docker-compose.yml for the full mesh):
+#   docker run --rm \
+#     -e AGENT_ABBR=ma -e STATE_FIPS=25 \
+#     -e AXL_PEERS=tls://axl-ca:9001,tls://axl-tx:9001 \
+#     --env-file .env.local \
+#     federated-reserve/agent:latest
+
+# -----------------------------------------------------------------------------
+# Stage 1 — Build the AXL Go binary
+# -----------------------------------------------------------------------------
+FROM golang:1.25-bookworm AS axl-builder
+WORKDIR /src
+# vendor/axl is a full Go module; copy just it for the build cache.
+COPY vendor/axl/go.mod vendor/axl/go.sum ./
+RUN go mod download
+COPY vendor/axl/ ./
+RUN make build && test -x ./node
+
+# -----------------------------------------------------------------------------
+# Stage 2 — Install Python AXL integrations into a venv we can copy out
+# -----------------------------------------------------------------------------
+FROM python:3.12-slim-bookworm AS python-deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt
+RUN python -m venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
+COPY vendor/axl/integrations/ /opt/integrations/
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -e /opt/integrations \
+    && pip install --no-cache-dir 'sse_starlette' 'protobuf<6'
+
+# -----------------------------------------------------------------------------
+# Stage 3 — Install Bun workspace dependencies
+# -----------------------------------------------------------------------------
+FROM oven/bun:1.2-debian AS bun-deps
+WORKDIR /app
+COPY package.json bun.lock ./
+COPY tsconfig.base.json tsconfig.json ./
+COPY packages/shared/package.json   packages/shared/
+COPY packages/agent/package.json    packages/agent/
+COPY packages/og-inft/package.json  packages/og-inft/
+COPY packages/data-plane/package.json packages/data-plane/
+COPY packages/observer/package.json packages/observer/
+COPY packages/frontend/package.json packages/frontend/
+# Skip postinstall scripts so optional native modules (bufferutil,
+# utf-8-validate from `ws`) don't try to invoke node-gyp — they're not
+# required for the agent's WebSocket usage.
+RUN bun install --frozen-lockfile --ignore-scripts \
+    || bun install --ignore-scripts
+# Now copy the actual source — these layers change more often than deps.
+# Observer is in here too because it's a mesh peer (AXL + router sidecars
+# layered the same as an agent), and it can be selected at container start
+# by overriding the entrypoint.
+COPY packages/shared   packages/shared
+COPY packages/og-inft  packages/og-inft
+COPY packages/agent    packages/agent
+COPY packages/observer packages/observer
+
+# -----------------------------------------------------------------------------
+# Final image — Python base (we need both python + bun + the AXL binary)
+# -----------------------------------------------------------------------------
+FROM python:3.12-slim-bookworm
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        gettext-base \
+        openssl \
+        unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Bun runtime — copy from the official image rather than re-installing.
+COPY --from=oven/bun:1.2-debian /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.2-debian /usr/local/bin/bunx /usr/local/bin/bunx
+
+# AXL binary
+COPY --from=axl-builder /src/node /usr/local/bin/axl-node
+
+# Python venv with AXL integrations
+COPY --from=python-deps /opt/venv /opt/venv
+COPY --from=python-deps /opt/integrations /opt/integrations
+ENV PATH=/opt/venv/bin:/usr/local/bin:$PATH
+
+# Workspace — Bun installs all deps under root node_modules + per-package.
+WORKDIR /app
+COPY --from=bun-deps /app /app
+
+# AXL config template + entrypoints (one for state-treasurer agents, one
+# for the observer mesh peer — both reuse this same image).
+COPY docker/configs/node.template.json /app/docker/configs/node.template.json
+COPY docker/entrypoint-agent.sh    /app/docker/entrypoint-agent.sh
+COPY docker/entrypoint-observer.sh /app/docker/entrypoint-observer.sh
+RUN chmod +x /app/docker/entrypoint-agent.sh /app/docker/entrypoint-observer.sh
+
+# Per-container scratch for the local hot mirror. With MEMORY_BACKEND=og the
+# real durable copy lives on 0G; this dir is treated as ephemeral.
+RUN mkdir -p /app/memory /app/.keys /app/mesh/configs /app/.data
+
+# Image defaults — every value here can be overridden at `docker run` /
+# compose time. Secrets (API keys, wallet PKs) are NOT baked in; they
+# arrive via env_file or a secrets manager.
+ENV MEMORY_ROOT=/app/memory \
+    MEMORY_BACKEND=og \
+    OG_ANCHOR_ENABLED=1 \
+    TICK_INTERVAL_MS=30000 \
+    REFLECT_EVERY_N_TICKS=8 \
+    AXL_LISTEN_PORT=9001 \
+    AXL_API_PORT=9002 \
+    AXL_TCP_PORT=7000 \
+    MCP_ROUTER_PORT=9003 \
+    A2A_SERVER_PORT=9004 \
+    MCP_SERVER_PORT=7100 \
+    OBSERVER_PORT=3001 \
+    OBSERVER_MCP_PORT=7200
+
+# Healthcheck hits the AXL bridge (always running) — agent crashloop will
+# eventually kill the container even if AXL itself stays up. Compose / ECS
+# can layer a stricter check on the agent's MCP server if needed.
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:${AXL_API_PORT:-9002}/topology >/dev/null || exit 1
+
+ENTRYPOINT ["/app/docker/entrypoint-agent.sh"]

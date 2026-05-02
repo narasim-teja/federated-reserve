@@ -1,0 +1,50 @@
+# Federated Reserve data plane sidecar.
+#
+# Pulls per-state economic indicators from FRED, BLS, BEA, Census + active
+# NOAA shock events. Shared across the whole mesh (one instance, all agents
+# poll it) so upstream rate limits aren't multiplied per-agent.
+#
+# Build:
+#   docker build -f docker/Dockerfile.data-plane -t federated-reserve/data-plane:latest .
+
+# -----------------------------------------------------------------------------
+# Stage 1 — install Bun deps for the workspace
+# -----------------------------------------------------------------------------
+FROM oven/bun:1.2-debian AS deps
+WORKDIR /app
+COPY package.json bun.lock ./
+COPY tsconfig.base.json tsconfig.json ./
+COPY packages/shared/package.json     packages/shared/
+COPY packages/og-inft/package.json    packages/og-inft/
+COPY packages/data-plane/package.json packages/data-plane/
+COPY packages/agent/package.json      packages/agent/
+COPY packages/observer/package.json   packages/observer/
+COPY packages/frontend/package.json   packages/frontend/
+RUN bun install --frozen-lockfile --ignore-scripts \
+    || bun install --ignore-scripts
+
+# -----------------------------------------------------------------------------
+# Final image — slim Bun runtime + data plane source
+# -----------------------------------------------------------------------------
+FROM oven/bun:1.2-debian
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=deps /app/node_modules /app/node_modules
+COPY --from=deps /app/packages /app/packages
+COPY tsconfig.base.json tsconfig.json /app/
+COPY packages/shared    /app/packages/shared
+COPY packages/og-inft   /app/packages/og-inft
+COPY packages/data-plane /app/packages/data-plane
+
+ENV DATA_PLANE_PORT=3002
+EXPOSE 3002
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:${DATA_PLANE_PORT}/healthz >/dev/null || exit 1
+
+WORKDIR /app/packages/data-plane
+CMD ["bun", "run", "src/index.ts"]

@@ -1,0 +1,41 @@
+# Build artifacts + IDE noise
+node_modules
+**/node_modules
+**/.next
+**/dist
+**/build
+**/.cache
+**/coverage
+.git
+.idea
+.vscode
+
+# Local secrets and per-host state — supplied at runtime via env / secrets
+.env
+.env.local
+.env.*.local
+.keys
+
+# Hot-mirror state — agents in containers re-hydrate from 0G
+memory/
+
+# Local logs / scratch
+/tmp/
+*.log
+.data/data-plane-cache.json
+.data/shocks-cache.json
+
+# Python venv (we install fresh in the image)
+.venv
+
+# Spike scratch dirs (never shipped)
+spikes/*/.work
+spikes/*/.runtime
+
+# Mac/OS noise
+.DS_Store
+
+# Docs / README — not needed inside the image
+docs/
+README.md
+FEEDBACK.md

@@ -90,7 +90,10 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 const server = Bun.serve({
   port: PORT,
-  hostname: '127.0.0.1',
+  // 0.0.0.0 so containers on the same docker network can reach the
+  // sidecar by hostname; locally-only access is enforced at the host
+  // level (compose only exposes the port via `ports:` directive).
+  hostname: process.env.DATA_PLANE_BIND ?? '0.0.0.0',
   fetch: async (req) => {
     const url = new URL(req.url);
 

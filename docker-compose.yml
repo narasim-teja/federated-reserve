@@ -1,0 +1,300 @@
+# Federated Reserve — full 10-agent local mesh in containers.
+#
+# Boots the complete federation (8 deep states + FED + Treasury) plus the
+# shared data-plane sidecar. Each agent runs its own AXL node + MCP router
+# + Bun agent. Agents are stateless: durable memory lives on 0G Storage via
+# OgStorageMemory; the in-container memory/<abbr>/ dir is a hot mirror.
+#
+# Prereqs:
+#   - .env.local populated (OPENROUTER_API_KEY, FRED_API_KEY, BLS_API_KEY,
+#     BEA_API_KEY, CENSUS_API_KEY, UNISWAP_API_KEY, MASTER_SEED, all
+#     WALLET_<ABBR>_PRIVATE_KEY / WALLET_<ABBR>_ADDRESS, OG_*).
+#   - 0G Galileo wallets funded (faucet: https://faucet.0g.ai). Each
+#     agent's per-tick state changes mint a small testnet tx.
+#   - Per-agent iNFT symmetric keys at memory/<abbr>/og-key.bin for the
+#     8 deep states (already present after scripts/mint-inft.ts).
+#     FED + TRS don't have iNFTs and use plaintext blobs (still functional).
+#
+# Run:
+#   docker compose up --build              # boot full mesh in foreground
+#   docker compose up -d                   # detached
+#   docker compose logs -f agent-ma        # tail one agent
+#   docker compose down                    # stop
+#
+# Scope:
+#   - 10 agents (MA, CA, TX, NY, FL, IL, WA, AK + FED + TRS)
+#   - 1 data-plane sidecar (FRED/BLS/BEA/NOAA ingest)
+#   Add an observer service later by re-using docker/Dockerfile.observer.
+
+x-agent-base: &agent-base
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.agent
+  image: federated-reserve/agent:latest
+  env_file:
+    - .env.local
+  environment: &agent-env
+    MEMORY_BACKEND: og
+    OG_ANCHOR_ENABLED: "1"
+    AXL_LISTEN_PORT: "9001"
+    AXL_API_PORT: "9002"
+    AXL_TCP_PORT: "7000"
+    MCP_ROUTER_PORT: "9003"
+    A2A_SERVER_PORT: "9004"
+    MCP_SERVER_PORT: "7100"
+    # Sidecars on the compose network — DNS resolves the service hostnames.
+    # Override either to a real production URL when deploying outside compose.
+    DATA_PLANE_URL: "http://data-plane:3002"
+    OBSERVER_HTTP_URL: "http://observer:3001"
+  networks:
+    - mesh
+  depends_on:
+    data-plane:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  # ---------------------------------------------------------------------------
+  # Shared FRED / BLS / BEA / NOAA ingest sidecar
+  # ---------------------------------------------------------------------------
+  data-plane:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.data-plane
+    image: federated-reserve/data-plane:latest
+    env_file:
+      - .env.local
+    environment:
+      DATA_PLANE_PORT: "3002"
+    ports:
+      - "3002:3002"   # exposed for debugging only
+    networks:
+      - mesh
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3002/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Massachusetts (FIPS 25)
+  # ---------------------------------------------------------------------------
+  agent-ma:
+    <<: *agent-base
+    container_name: agent-ma
+    hostname: agent-ma
+    environment:
+      <<: *agent-env
+      AGENT_ABBR: ma
+      STATE_FIPS: "25"
+      AXL_PEERS: "tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
+    volumes:
+      - ./memory/ma/og-key.bin:/run/secrets/og_key:ro
+      - ./.keys/node-ma.pem:/run/secrets/axl_key:ro
+
+  # ---------------------------------------------------------------------------
+  # California (FIPS 6)
+  # ---------------------------------------------------------------------------
+  agent-ca:
+    <<: *agent-base
+    container_name: agent-ca
+    hostname: agent-ca
+    environment:
+      <<: *agent-env
+      AGENT_ABBR: ca
+      STATE_FIPS: "6"
+      AXL_PEERS: "tls://agent-ma:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
+    volumes:
+      - ./memory/ca/og-key.bin:/run/secrets/og_key:ro
+      - ./.keys/node-ca.pem:/run/secrets/axl_key:ro
+
+  # ---------------------------------------------------------------------------
+  # Texas (FIPS 48)
+  # ---------------------------------------------------------------------------
+  agent-tx:
+    <<: *agent-base
+    container_name: agent-tx
+    hostname: agent-tx
+    environment:
+      <<: *agent-env
+      AGENT_ABBR: tx
+      STATE_FIPS: "48"
+      AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
+    volumes:
+      - ./memory/tx/og-key.bin:/run/secrets/og_key:ro
+      - ./.keys/node-tx.pem:/run/secrets/axl_key:ro
+
+  # ---------------------------------------------------------------------------
+  # New York (FIPS 36)
+  # ---------------------------------------------------------------------------
+  agent-ny:
+    <<: *agent-base
+    container_name: agent-ny
+    hostname: agent-ny
+    environment:
+      <<: *agent-env
+      AGENT_ABBR: ny
+      STATE_FIPS: "36"
+      AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
+    volumes:
+      - ./memory/ny/og-key.bin:/run/secrets/og_key:ro
+      - ./.keys/node-ny.pem:/run/secrets/axl_key:ro
+
+  # ---------------------------------------------------------------------------
+  # Florida (FIPS 12)
+  # ---------------------------------------------------------------------------
+  agent-fl:
+    <<: *agent-base
+    container_name: agent-fl
+    hostname: agent-fl
+    environment:
+      <<: *agent-env
+      AGENT_ABBR: fl
+      STATE_FIPS: "12"
+      AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
+    volumes:
+      - ./memory/fl/og-key.bin:/run/secrets/og_key:ro
+      - ./.keys/node-fl.pem:/run/secrets/axl_key:ro
+
+  # ---------------------------------------------------------------------------
+  # Illinois (FIPS 17)
+  # ---------------------------------------------------------------------------
+  agent-il:
+    <<: *agent-base
+    container_name: agent-il
+    hostname: agent-il
+    environment:
+      <<: *agent-env
+      AGENT_ABBR: il
+      STATE_FIPS: "17"
+      AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
+    volumes:
+      - ./memory/il/og-key.bin:/run/secrets/og_key:ro
+      - ./.keys/node-il.pem:/run/secrets/axl_key:ro
+
+  # ---------------------------------------------------------------------------
+  # Washington (FIPS 53)
+  # ---------------------------------------------------------------------------
+  agent-wa:
+    <<: *agent-base
+    container_name: agent-wa
+    hostname: agent-wa
+    environment:
+      <<: *agent-env
+      AGENT_ABBR: wa
+      STATE_FIPS: "53"
+      AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
+    volumes:
+      - ./memory/wa/og-key.bin:/run/secrets/og_key:ro
+      - ./.keys/node-wa.pem:/run/secrets/axl_key:ro
+
+  # ---------------------------------------------------------------------------
+  # Alaska (FIPS 2)
+  # ---------------------------------------------------------------------------
+  agent-ak:
+    <<: *agent-base
+    container_name: agent-ak
+    hostname: agent-ak
+    environment:
+      <<: *agent-env
+      AGENT_ABBR: ak
+      STATE_FIPS: "2"
+      AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-fed:9001,tls://agent-trs:9001"
+    volumes:
+      - ./memory/ak/og-key.bin:/run/secrets/og_key:ro
+      - ./.keys/node-ak.pem:/run/secrets/axl_key:ro
+
+  # ---------------------------------------------------------------------------
+  # Federal Reserve (FIPS 100) — no iNFT, no og-key mount, plaintext blobs
+  # ---------------------------------------------------------------------------
+  agent-fed:
+    <<: *agent-base
+    container_name: agent-fed
+    hostname: agent-fed
+    environment:
+      <<: *agent-env
+      AGENT_ABBR: fed
+      STATE_FIPS: "100"
+      AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-trs:9001"
+    volumes:
+      - ./.keys/node-fed.pem:/run/secrets/axl_key:ro
+
+  # ---------------------------------------------------------------------------
+  # Treasury (FIPS 101) — no iNFT, no og-key mount, plaintext blobs
+  # ---------------------------------------------------------------------------
+  agent-trs:
+    <<: *agent-base
+    container_name: agent-trs
+    hostname: agent-trs
+    environment:
+      <<: *agent-env
+      AGENT_ABBR: trs
+      STATE_FIPS: "101"
+      AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001"
+    volumes:
+      - ./.keys/node-trs.pem:/run/secrets/axl_key:ro
+
+  # ---------------------------------------------------------------------------
+  # Observer — mesh peer that collects telemetry + fronts the dashboard API
+  # ---------------------------------------------------------------------------
+  # Reuses the agent image (it ships the observer package too) and overrides
+  # the entrypoint to run packages/observer instead of packages/agent. Joins
+  # the mesh as a 11th AXL peer.
+  observer:
+    image: federated-reserve/agent:latest
+    container_name: observer
+    hostname: observer
+    entrypoint: ["/app/docker/entrypoint-observer.sh"]
+    env_file:
+      - .env.local
+    environment:
+      AGENT_ABBR: observer
+      AXL_LISTEN_PORT: "9001"
+      AXL_API_PORT: "9002"
+      AXL_TCP_PORT: "7000"
+      MCP_ROUTER_PORT: "9003"
+      OBSERVER_PORT: "3001"
+      OBSERVER_MCP_PORT: "7200"
+      AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
+    ports:
+      - "3001:3001"   # HTTP feed + websocket — frontend hits this
+    volumes:
+      - ./.keys/node-observer.pem:/run/secrets/axl_key:ro
+    networks:
+      - mesh
+    depends_on:
+      data-plane:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3001/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Frontend — Next.js 15 dashboard, browser hits the observer's HTTP API
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        NEXT_PUBLIC_OBSERVER_HTTP_URL: http://localhost:3001
+    image: federated-reserve/frontend:latest
+    container_name: frontend
+    ports:
+      - "3000:3000"
+    networks:
+      - mesh
+    depends_on:
+      observer:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  mesh:
+    driver: bridge

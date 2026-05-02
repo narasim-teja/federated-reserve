@@ -1,0 +1,11 @@
+{
+  "PrivateKeyPath": "${AXL_KEY_PATH}",
+  "Peers": ${AXL_PEERS_JSON},
+  "Listen": ["tls://0.0.0.0:${AXL_LISTEN_PORT}"],
+  "api_port": ${AXL_API_PORT},
+  "tcp_port": ${AXL_TCP_PORT},
+  "router_addr": "http://127.0.0.1",
+  "router_port": ${MCP_ROUTER_PORT},
+  "a2a_addr": "http://127.0.0.1",
+  "a2a_port": ${A2A_SERVER_PORT}
+}
