@@ -1,0 +1,25 @@
+import type { SVGProps } from 'react';
+
+export function Logo({ className, ...rest }: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 200 200"
+      fill="currentColor"
+      role="img"
+      aria-label="Federated Reserve"
+      className={className}
+      {...rest}
+    >
+      <polygon points="100,30 24,76 176,76" />
+      <rect x="20" y="80" width="160" height="7" />
+      <rect x="36" y="93" width="8" height="60" />
+      <rect x="66" y="93" width="8" height="60" />
+      <rect x="96" y="93" width="8" height="60" />
+      <rect x="126" y="93" width="8" height="60" />
+      <rect x="156" y="93" width="8" height="60" />
+      <rect x="16" y="155" width="168" height="6" />
+      <rect x="10" y="164" width="180" height="4" />
+    </svg>
+  );
+}
