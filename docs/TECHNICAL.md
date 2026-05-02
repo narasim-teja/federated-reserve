@@ -1280,7 +1280,7 @@ mechanics, 8 onchain StateTokens + pools, multi-bidder bond auction
 working with credit-rating-driven yield evaluation, aid settlement
 on-chain, shock response structured. Commit `phase-4-federation-scaleup`.
 
-### Phase 5 — Frontend + iNFTs (Day 5) — 🚧 WATCHABLE SLICE COMPLETE 2026-05-01
+### Phase 5 — Frontend + iNFTs (Day 5) — ✅ COMPLETE 2026-05-02
 
 **Purpose:** Make it watchable. iNFT track deliverable.
 
@@ -1308,12 +1308,31 @@ on-chain, shock response structured. Commit `phase-4-federation-scaleup`.
     explorer links after `scripts/mint-inft.ts`
 - [x] `scripts/build-inft-manifest.ts` — for each deep state-agent, packages
   current persona, wallet owner, deployment metadata, `memory/<state>/state.json`,
-  and recent `log.jsonl` into `.data/inft-manifest.json` with
-  `mint_status: "pending_0g"` and a deterministic metadata hash.
-- [ ] `scripts/mint-inft.ts` — real 0G Storage encryption + ERC-7857 minting.
-  Deferred deliberately; the frontend does not fake token IDs.
-- [ ] iNFT contract deployed on 0G Chain, addresses recorded
-- [ ] Each minted iNFT verified on 0G explorer with metadata pointer
+  and recent `log.jsonl` into `.data/inft-manifest.json`. Refreshes `owner_address`
+  from on-chain `ownerOf` so post-transfer owners stay accurate.
+- [x] `scripts/mint-inft.ts` — real 0G Storage encryption (AES-256-GCM bundle +
+  ECIES-sealed key) and ERC-7857 minting. Round-trips locally before paying for
+  the on-chain mint; verifies `ownerOf`, `encryptedURI`, `metadataHash` match
+  what was sent.
+- [x] `scripts/decrypt-inft.ts` — proof of embedded intelligence. Reads on-chain
+  `encryptedURI` + `sealedKey`, downloads from 0G Storage, unseals with the
+  recipient PK, decrypts, and verifies the keccak-256 commitment matches the
+  on-chain hash. Hydrated proofs land in `.data/inft-proofs/<abbr>.json`.
+- [x] `scripts/transfer-inft.ts` — full ERC-7857 transfer ceremony with the
+  oracle-verified key rotation. Demonstrated for MA: token #25 transferred to
+  a fresh wallet, sealedKey rotated on-chain, transferee re-decrypts the
+  bundle. Proof: `.data/inft-transfers/ma.json`.
+- [x] `packages/agent/src/og-anchor.ts` — runtime `OgAnchoredMemory` that
+  mirrors material state changes to `INFT7857.updateMetadata`. Activated by
+  `OG_ANCHOR_ENABLED=1`. MA's on-chain `encryptedURI` already shows live
+  anchor updates beyond the mint snapshot.
+- [x] iNFT contract deployed on 0G Chain (Galileo testnet, chain id 16602):
+  - `INFT7857`: [`0xbae646e0092a74821c54ea36ea342eefb6a26ae1`](https://chainscan-galileo.0g.ai/address/0xbae646e0092a74821c54ea36ea342eefb6a26ae1)
+  - `MockOracle`: `0xdad62bba075bc0193551c91cc5db79e558e5e5db`
+- [x] Each minted iNFT verified on 0G explorer: 8/8 deep-state agents minted
+  (token ids = state FIPS: AK·2, CA·6, FL·12, IL·17, MA·25, NY·36, TX·48,
+  WA·53). All txs and 0G Storage blob roots recorded in
+  `contracts/deployments/0g-galileo.json`.
 
 #### Phase 5 gate — ✅ PASS
 
@@ -1330,10 +1349,12 @@ on-chain, shock response structured. Commit `phase-4-federation-scaleup`.
 ✓ iNFT manifest has all 8 deep-state entries
 ```
 
-**Deliverable:** Local live dashboard URL, observer mesh peer, and 8-entry
-iNFT manifest are complete. Real 0G mint/explorer links remain the next
-Phase 5 subtask before calling the full iNFT deliverable complete. Commit
-`phase-5-frontend-inft`.
+**Deliverable:** Local live dashboard URL, observer mesh peer, 8-entry iNFT
+manifest, and ✅ live 0G Galileo deployment with 8 minted iNFTs, runtime
+memory anchoring, and a verified transfer + re-decrypt ceremony for MA.
+Frontend renders the iNFT manifest panel (right rail) plus per-agent iNFT
+cards on the dossier page with explorer links to mint tx, 0G Storage blob,
+and contract. Commits `phase-5-frontend-inft` and `phase-5-0g-iNFT-live`.
 
 ### Phase 6 — Production Deploy + Polish (Day 6)
 

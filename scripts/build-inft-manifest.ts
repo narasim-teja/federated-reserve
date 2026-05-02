@@ -9,9 +9,20 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { http, createPublicClient, type Address } from 'viem';
 import { loadDeployments } from '../packages/shared/src/deployments.ts';
 import { getPersona } from '../packages/shared/src/personas.ts';
 import { STATES } from '../packages/shared/src/states.ts';
+
+const OWNER_OF_ABI = [
+  {
+    type: 'function',
+    name: 'ownerOf',
+    inputs: [{ name: 'tokenId', type: 'uint256' }],
+    outputs: [{ type: 'address' }],
+    stateMutability: 'view',
+  },
+] as const;
 
 const ROOT = resolve(import.meta.dir, '..');
 const ENV_LOCAL = join(ROOT, '.env.local');
@@ -120,6 +131,41 @@ const storageExplorerBase = (process.env.OG_STORAGE_EXPLORER_BASE_URL ?? 'https:
   '',
 );
 
+// Best-effort on-chain owner refresh — keeps the manifest honest after iNFT
+// transfers (e.g. the Phase 5 transfer demo). Falls back to the recorded
+// owner if the RPC isn't reachable or the contract address looks unminted.
+const ogRpcUrl = process.env.OG_RPC_URL ?? 'https://evmrpc-testnet.0g.ai';
+const onchainOwners = new Map<string, string>();
+if (inftAddress.startsWith('0x')) {
+  try {
+    const chainObj = {
+      id: chainId,
+      name: '0G-Galileo-Testnet',
+      nativeCurrency: { name: '0G', symbol: '0G', decimals: 18 },
+      rpcUrls: { default: { http: [ogRpcUrl] } },
+    } as const;
+    const pub = createPublicClient({ chain: chainObj, transport: http(ogRpcUrl) });
+    for (const [abbr, mint] of Object.entries(ogMints)) {
+      try {
+        const onchain = (await pub.readContract({
+          address: inftAddress as Address,
+          abi: OWNER_OF_ABI,
+          functionName: 'ownerOf',
+          args: [BigInt(mint.tokenId)],
+        })) as string;
+        onchainOwners.set(abbr, onchain);
+      } catch {
+        // Token doesn't exist or RPC error — fall back to recorded owner.
+      }
+    }
+    if (onchainOwners.size > 0) {
+      console.log(`[inft-manifest] refreshed ${onchainOwners.size} owners from ${ogRpcUrl}`);
+    }
+  } catch (err) {
+    console.warn(`[inft-manifest] on-chain owner refresh skipped: ${String(err)}`);
+  }
+}
+
 const entries = [];
 for (const state of STATES.filter((s) => s.tier === 'deep')) {
   const persona = getPersona(state.abbr);
@@ -143,7 +189,7 @@ for (const state of STATES.filter((s) => s.tier === 'deep')) {
   const minted = ogMints[state.abbr];
   const isMinted = !!minted;
   const tokenIdNum = minted ? Number(minted.tokenId) : null;
-  const ownerAddress = minted?.owner_address ?? fallbackOwner;
+  const ownerAddress = onchainOwners.get(state.abbr) ?? minted?.owner_address ?? fallbackOwner;
   const metadataUri = minted?.encrypted_uri ?? `0g://pending/${state.abbr.toLowerCase()}/${fallbackHash}`;
   const metadataHash = minted?.metadata_hash ?? fallbackHash;
   const tokenExplorerUrl = inftAddress.startsWith('0x') ? `${explorerBase}/address/${inftAddress}` : '';

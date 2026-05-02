@@ -333,6 +333,12 @@ export default function AgentDossierPage() {
               <CardContent>
                 {inft ? (
                   <dl className="grid grid-cols-[80px_1fr] gap-x-3 gap-y-1 font-mono text-[10.5px]">
+                    {inft.token_id != null && (
+                      <>
+                        <dt className="text-[var(--color-fg-subtle)]">token</dt>
+                        <dd className="truncate text-[var(--color-fg)]">#{inft.token_id}</dd>
+                      </>
+                    )}
                     <dt className="text-[var(--color-fg-subtle)]">owner</dt>
                     <dd className="truncate text-[var(--color-fg)]">
                       {compactAddress(inft.owner_address)}
@@ -361,6 +367,46 @@ export default function AgentDossierPage() {
                         </span>
                       )}
                     </dd>
+                    {inft.onchain?.mint_tx_url && (
+                      <>
+                        <dt className="text-[var(--color-fg-subtle)]">mint tx</dt>
+                        <dd className="truncate">
+                          <a
+                            href={inft.onchain.mint_tx_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[var(--color-cyan)] hover:underline"
+                          >
+                            {compactHash(inft.onchain.mint_tx)}
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        </dd>
+                      </>
+                    )}
+                    {inft.onchain?.storage_blob_url && (
+                      <>
+                        <dt className="text-[var(--color-fg-subtle)]">0G blob</dt>
+                        <dd className="truncate">
+                          <a
+                            href={inft.onchain.storage_blob_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[var(--color-cyan)] hover:underline"
+                          >
+                            {compactHash(inft.onchain.storage_root_hash)}
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        </dd>
+                      </>
+                    )}
+                    {inft.onchain?.encrypted_bytes != null && (
+                      <>
+                        <dt className="text-[var(--color-fg-subtle)]">size</dt>
+                        <dd className="truncate text-[var(--color-fg)]">
+                          {inft.onchain.encrypted_bytes.toLocaleString()} B
+                        </dd>
+                      </>
+                    )}
                   </dl>
                 ) : (
                   <p className="text-[12px] text-[var(--color-fg-subtle)]">

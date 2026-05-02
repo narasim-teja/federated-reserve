@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AiInsightsPanel } from '@/components/dashboard/ai-insights';
 import { EventFeed } from '@/components/dashboard/event-feed';
 import { GeoMap } from '@/components/dashboard/geo-map';
+import { InftGrid } from '@/components/dashboard/inft-grid';
 import { InstabilityPanel } from '@/components/dashboard/instability-panel';
 import { MapLegend } from '@/components/dashboard/map-legend';
 import { NegotiationModal } from '@/components/dashboard/negotiation-modal';
@@ -86,6 +87,7 @@ export default function LivePage() {
               selectedFips={selected?.fips ?? null}
               onSelect={setSelectedFips}
             />
+            <InftGrid entries={snapshot?.infts ?? []} />
             <StrategicPosture states={states} />
           </aside>
         </div>

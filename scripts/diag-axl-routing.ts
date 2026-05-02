@@ -29,6 +29,8 @@
  * Run: bun run scripts/diag-axl-routing.ts   (mesh must be up)
  */
 
+export {};
+
 const PAIRS: Array<{ name: string; api: string }> = [
   { name: 'MA', api: 'http://127.0.0.1:9002' },
   { name: 'CA', api: 'http://127.0.0.1:9012' },

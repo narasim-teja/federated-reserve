@@ -128,6 +128,104 @@ a different layer:
 - **0G** — agent memory + decision history on 0G Storage, deep state-agents
   minted as ERC-7857 iNFTs on 0G Chain.
 
+## 0G iNFT submission
+
+**Track:** Best Autonomous Agents, Swarms & iNFT Innovations.
+
+**What it is:** 8 deep state-treasurer agents (the federal "deep state":
+AK, CA, FL, IL, MA, NY, TX, WA) are minted as ERC-7857 iNFTs on 0G Galileo
+testnet. The token is a transferable AI policymaker — its persona, persistent
+memory (treasury composition, reserve ratio, received indicators, decision
+log) is encrypted, anchored on 0G Storage, and committed to on-chain via
+`metadataHash`. As each agent decides and learns, the runtime fires
+`INFT7857.updateMetadata(...)` so the chain reflects live thinking.
+
+**Contract addresses (0G Galileo, chain id 16602):**
+
+| Contract     | Address |
+|--------------|---------|
+| `INFT7857`   | [`0xbae646e0092a74821c54ea36ea342eefb6a26ae1`](https://chainscan-galileo.0g.ai/address/0xbae646e0092a74821c54ea36ea342eefb6a26ae1) |
+| `MockOracle` | [`0xdad62bba075bc0193551c91cc5db79e558e5e5db`](https://chainscan-galileo.0g.ai/address/0xdad62bba075bc0193551c91cc5db79e558e5e5db) |
+
+**8 minted iNFTs (token id = state FIPS):**
+
+| Agent | Token | Mint tx |
+|-------|-------|---------|
+| AK    | #2    | [`0xe06d76dc...`](https://chainscan-galileo.0g.ai/tx/0xe06d76dc76416f9a771ce2a3dc5abdc12f2443a36cd9f7a3a250fb717a57db75) |
+| CA    | #6    | [`0xe60ae913...`](https://chainscan-galileo.0g.ai/tx/0xe60ae9139f61caf848a99e947114eaee1024163e9bf19cbbab7e221eabd2f31a) |
+| FL    | #12   | [`0xdb9772c9...`](https://chainscan-galileo.0g.ai/tx/0xdb9772c9dd9d79c7dcdb5d8f6be89e3c4cad0587c157d7638b1692e142e05057) |
+| IL    | #17   | [`0x25389301...`](https://chainscan-galileo.0g.ai/tx/0x25389301c5dbf19186c7405bb1220d9e39038da431be5f3cfd2c1ecb2c1ab9ae) |
+| MA    | #25   | [`0x7cc984d8...`](https://chainscan-galileo.0g.ai/tx/0x7cc984d814562b6c3a702289d3f25a526d86e0dfd5605a98bbf6e456950234e3) |
+| NY    | #36   | [`0x56227bb0...`](https://chainscan-galileo.0g.ai/tx/0x56227bb0ee075a8e918cf50184bcb98af2c316e70b9bb206af3d3393bb2a4aa0) |
+| TX    | #48   | [`0x0769541d...`](https://chainscan-galileo.0g.ai/tx/0x0769541d18f9ccdd3e9266e0a8dc8e90f85c092d3b599884eed8e91377a0c202) |
+| WA    | #53   | [`0xab178604...`](https://chainscan-galileo.0g.ai/tx/0xab17860468bf115a4619f98c2b1bc9eba90b9d424125c93aea0cb6bb34f1ddee) |
+
+**Proof of embedded intelligence (transfer + re-decrypt):** MA token #25 was
+transferred to a fresh wallet via the ERC-7857 ceremony in
+[`scripts/transfer-inft.ts`](./scripts/transfer-inft.ts) (transfer tx
+[`0x18800e59...`](https://chainscan-galileo.0g.ai/tx/0x18800e59ac34ad6ff5579a8555dc34be3b43cd5e79acc416d2608029b2ba30a8)).
+The new owner unsealed the rotated symmetric key with their secp256k1
+private key, downloaded the encrypted bundle from 0G Storage by root hash,
+decrypted it, and verified that `keccak256(plaintext) == metadataHash` on
+chain. Receipt: [`.data/inft-transfers/ma.json`](./.data/inft-transfers/ma.json).
+
+**0G features and SDKs used:**
+
+- **0G Storage** via [`@0gfoundation/0g-storage-ts-sdk`](https://www.npmjs.com/package/@0gfoundation/0g-storage-ts-sdk)
+  — `Indexer.upload/download` for encrypted agent bundles
+  ([packages/og-inft/src/storage.ts](./packages/og-inft/src/storage.ts)).
+  Live indexer: `https://indexer-storage-testnet-turbo.0g.ai`.
+- **0G Chain (Galileo testnet)** via `viem` — ERC-7857 deploy + per-state
+  mint + per-tick `updateMetadata` anchoring.
+- **ERC-7857 iNFT** ([contracts/src/INFT7857.sol](./contracts/src/INFT7857.sol))
+  — full implementation: `mint`, `updateMetadata`, oracle-verified `transfer`
+  with sealed-key rotation, `clone`, `authorizeUsage/revokeUsage`, plus the
+  view functions (`encryptedURI`, `metadataHash`, `sealedKey`).
+- **AES-256-GCM bundle encryption + ECIES sealed key** (secp256k1 ECDH →
+  HKDF-SHA256 → AES-256-GCM wrap, 125-byte wire format) in
+  [packages/og-inft/src/crypto.ts](./packages/og-inft/src/crypto.ts).
+
+**Swarm coordination (track requirement):** the 50-agent mesh communicates
+**peer-to-peer** over AXL with no central broker. Two channels:
+
+- **MCP** for tool-style operations: `query_treasury`, `share_economic_indicator`,
+  `share_topology`, `announce_fed_rate`. Routed via per-host MCP Routers,
+  bridged through AXL leaf↔leaf links.
+- **A2A** for multi-turn negotiation: `negotiate-bilateral-swap`,
+  `propose-bond-purchase`, `coordinate-aid` over `@a2a-js/sdk`. Coalitions
+  emerge bottom-up from bilateral A2A rounds.
+
+Full mesh architecture and protocol details:
+[docs/TECHNICAL.md](./docs/TECHNICAL.md). Phase 5 iNFT pipeline notes:
+[docs/TECHNICAL.md §1593–1605](./docs/TECHNICAL.md).
+
+**Reproduce locally:**
+
+```bash
+# 1. Funded wallets in .env.local: WALLET_DEPLOYER_*, WALLET_<ABBR>_* for
+#    AK CA FL IL MA NY TX WA. Faucet: https://faucet.0g.ai
+
+# 2. Deploy iNFT + oracle to 0G Galileo
+forge build
+bun run scripts/deploy-0g.ts
+
+# 3. Mint all 8 deep-state agents (encrypts + uploads + mints + verifies)
+bun run scripts/mint-inft.ts
+
+# 4. Re-decrypt any agent from chain alone (proof of embedded intelligence)
+bun run scripts/decrypt-inft.ts MA
+
+# 5. Optional: transfer demo (rotates sealed key on chain)
+bun run scripts/transfer-inft.ts MA
+
+# 6. Optional: enable runtime memory anchoring on the live mesh
+OG_ANCHOR_ENABLED=1 ./scripts/run-local-mesh.sh
+```
+
+Outputs: `contracts/deployments/0g-galileo.json` (addresses + per-state mint
+records), `.data/inft-manifest.json` (frontend feed), `.data/inft-proofs/`
+(decrypt receipts), `.data/inft-transfers/` (transfer ceremonies).
+
 ## License
 
 Hackathon submission, no license declared yet. Will be MIT or Apache-2.0

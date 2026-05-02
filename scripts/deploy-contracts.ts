@@ -215,8 +215,9 @@ const inftAddr = await deploy('INFT7857', inftArtifact.abi, inftArtifact.bytecod
 console.log('[deploy] step 4: mint USDC to state wallets');
 const usdcAbi = parseAbi(['function mint(address to, uint256 amount)']);
 for (const s of STATES) {
-  const agent = stateTokens[s.abbr].agent;
-  await send(`USDC.mint(${s.abbr})`, usdcAddr, usdcAbi, 'mint', [agent, USDC_PER_STATE]);
+  const t = stateTokens[s.abbr];
+  if (!t) throw new Error(`stateTokens[${s.abbr}] missing after deploy loop`);
+  await send(`USDC.mint(${s.abbr})`, usdcAddr, usdcAbi, 'mint', [t.agent, USDC_PER_STATE]);
 }
 // Reserve USDC for the LP seed (5 pools).
 const lpUsdcReserve = USDC_LP_RESERVE_PER_POOL * BigInt(STATES.length);
@@ -226,6 +227,7 @@ console.log('[deploy] step 5: distribute StateTokens to state wallets');
 const stTokenAbi = parseAbi(['function transfer(address to, uint256 value) returns (bool)']);
 for (const s of STATES) {
   const t = stateTokens[s.abbr];
+  if (!t) throw new Error(`stateTokens[${s.abbr}] missing after deploy loop`);
   await send(`${s.abbr}.transfer(agent, 1.9M)`, t.address, stTokenAbi, 'transfer', [
     t.agent,
     STATE_TOKEN_TO_AGENT,
@@ -243,17 +245,21 @@ const deployments = {
   contracts: {
     MockUSDC: { address: usdcAddr, decimals: 6 },
     StateTokens: Object.fromEntries(
-      STATES.map((s) => [
-        s.abbr,
-        {
-          address: stateTokens[s.abbr].address,
-          fips: s.fips,
-          name: s.fullName,
-          symbol: s.symbol,
-          decimals: 18,
-          agent: stateTokens[s.abbr].agent,
-        },
-      ]),
+      STATES.map((s) => {
+        const t = stateTokens[s.abbr];
+        if (!t) throw new Error(`stateTokens[${s.abbr}] missing while writing deployments`);
+        return [
+          s.abbr,
+          {
+            address: t.address,
+            fips: s.fips,
+            name: s.fullName,
+            symbol: s.symbol,
+            decimals: 18,
+            agent: t.agent,
+          },
+        ];
+      }),
     ),
     INFT7857: { address: inftAddr, oracle: oracleAddr },
     MockOracle: { address: oracleAddr },

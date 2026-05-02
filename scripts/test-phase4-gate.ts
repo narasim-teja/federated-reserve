@@ -65,7 +65,7 @@ loadEnv();
 const RPC = process.env.UNICHAIN_SEPOLIA_RPC ?? 'https://sepolia.unichain.org';
 const CHAIN_ID = Number(process.env.UNICHAIN_SEPOLIA_CHAIN_ID ?? 1301);
 
-const API: Record<string, string> = {
+const API = {
   MA: 'http://127.0.0.1:9002',
   CA: 'http://127.0.0.1:9012',
   TX: 'http://127.0.0.1:9022',
@@ -76,7 +76,7 @@ const API: Record<string, string> = {
   AK: 'http://127.0.0.1:9072',
   FED: 'http://127.0.0.1:9082',
   TRS: 'http://127.0.0.1:9092',
-};
+} as const satisfies Record<string, string>;
 
 const FIPS: Record<string, number> = {
   MA: 25,
@@ -206,31 +206,34 @@ console.log('[p4-gate] starting Phase 4 gate test');
 const dep: ContractDeployments = loadDeployments('unichain-sepolia');
 const usdc = getUsdc(dep);
 const BOND_ID = 'MA-2030-Q1-A';
-const bond = getBond(dep, BOND_ID);
-if (!bond) {
+const bondRecord = getBond(dep, BOND_ID);
+if (!bondRecord) {
   fail('setup', `bond ${BOND_ID} not in deployments — run scripts/deploy-bond.ts`);
   process.exit(1);
 }
+const bond = bondRecord;
 
 console.log(
   `[p4-gate] bond ${bond.bondId} @ ${bond.address}  issuer=MA ${bond.issuerAddr}  principal=${bond.principalUsdcBase}`,
 );
 
 const pubkeys: Record<string, string> = {};
-for (const name of ['MA', 'CA', 'NY', 'FL', 'IL', 'TX', 'AK', 'FED', 'TRS']) {
+const API_NAMES = ['MA', 'CA', 'NY', 'FL', 'IL', 'TX', 'AK', 'FED', 'TRS'] as const satisfies ReadonlyArray<keyof typeof API>;
+for (const name of API_NAMES) {
   const api = API[name];
-  if (!api) throw new Error(`missing API URL for ${name}`);
   pubkeys[name] = await getPubkey(api);
 }
 ok('mesh reachable, pubkeys resolved');
-const maPubkey = pubkeys.MA;
-const nyPubkey = pubkeys.NY;
-const flPubkey = pubkeys.FL;
-const ilPubkey = pubkeys.IL;
-const trsPubkey = pubkeys.TRS;
-if (!maPubkey || !nyPubkey || !flPubkey || !ilPubkey || !trsPubkey) {
-  throw new Error('missing required pubkey after mesh resolution');
+function requirePubkey(name: string): string {
+  const v = pubkeys[name];
+  if (!v) throw new Error(`missing pubkey for ${name} after mesh resolution`);
+  return v;
 }
+const maPubkey: string = requirePubkey('MA');
+const nyPubkey: string = requirePubkey('NY');
+const flPubkey: string = requirePubkey('FL');
+const ilPubkey: string = requirePubkey('IL');
+const trsPubkey: string = requirePubkey('TRS');
 
 const maAddr = process.env.WALLET_MA_ADDRESS as Address;
 const caAddr = process.env.WALLET_CA_ADDRESS as Address;

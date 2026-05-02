@@ -207,9 +207,10 @@ console.log('[p4-deploy] step 1: StateTokens IL/WA/AK');
 const stateTokenArtifact = loadArtifact('StateToken');
 const newlyDeployed: Set<string> = new Set();
 for (const s of PHASE4_STATES) {
-  if (deployments.contracts.StateTokens[s.abbr]) {
+  const existing = deployments.contracts.StateTokens[s.abbr];
+  if (existing) {
     console.log(
-      `[p4-deploy]   ${s.abbr} already deployed at ${deployments.contracts.StateTokens[s.abbr].address} — skip`,
+      `[p4-deploy]   ${s.abbr} already deployed at ${existing.address} — skip`,
     );
     continue;
   }

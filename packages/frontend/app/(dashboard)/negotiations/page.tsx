@@ -2,7 +2,7 @@
 
 import { Handshake, MessagesSquare } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { NegotiationModal } from '@/components/dashboard/negotiation-modal';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -14,6 +14,24 @@ import type { NegotiationView } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 export default function NegotiationsPage() {
+  return (
+    <Suspense fallback={<NegotiationsFallback />}>
+      <NegotiationsContent />
+    </Suspense>
+  );
+}
+
+function NegotiationsFallback() {
+  return (
+    <div className="flex h-full items-center justify-center p-6">
+      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
+        Loading negotiations…
+      </p>
+    </div>
+  );
+}
+
+function NegotiationsContent() {
   const { snapshot } = useObserverContext();
   const searchParams = useSearchParams();
   const queryTask = searchParams?.get('task') ?? null;

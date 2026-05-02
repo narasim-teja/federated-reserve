@@ -117,9 +117,10 @@ const deployments = JSON.parse(readFileSync(DEPLOYMENTS_PATH, 'utf8')) as {
   >;
 };
 
-if (deployments.bonds?.[SPEC.bondId]) {
+const existingBond = deployments.bonds?.[SPEC.bondId];
+if (existingBond) {
   console.log(
-    `[bond-deploy] ${SPEC.bondId} already deployed at ${deployments.bonds[SPEC.bondId].address} — skip`,
+    `[bond-deploy] ${SPEC.bondId} already deployed at ${existingBond.address} — skip`,
   );
   process.exit(0);
 }
