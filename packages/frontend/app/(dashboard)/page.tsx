@@ -49,7 +49,7 @@ export default function LivePage() {
         <div className="grid flex-1 min-h-0 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_380px]">
           <section className="relative flex min-h-0 flex-col border-r border-[var(--color-border)]">
             <MapHeader />
-            <div className="relative flex-1 min-h-[420px]">
+            <div className="relative flex-1 min-h-0">
               <GeoMap
                 states={states}
                 selectedFips={selected?.fips ?? null}

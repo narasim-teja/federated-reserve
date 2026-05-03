@@ -13,7 +13,6 @@ interface InstabilityPanelProps {
   states: StateView[];
   selectedFips: number | null;
   onSelect: (fips: number) => void;
-  limit?: number;
 }
 
 const TONE: Record<Health, string> = {
@@ -34,15 +33,13 @@ export function InstabilityPanel({
   states,
   selectedFips,
   onSelect,
-  limit = 6,
 }: InstabilityPanelProps) {
   const ranked = useMemo(
     () =>
       states
         .map(computeInstability)
-        .sort((a, b) => b.total - a.total)
-        .slice(0, limit),
-    [states, limit],
+        .sort((a, b) => b.total - a.total),
+    [states],
   );
 
   return (
@@ -53,10 +50,10 @@ export function InstabilityPanel({
           State Instability
         </CardTitle>
         <Badge variant="muted" className="font-mono">
-          top {limit}
+          {ranked.length}
         </Badge>
       </CardHeader>
-      <CardContent className="flex flex-col gap-1.5 p-2">
+      <CardContent className="flex max-h-80 flex-col gap-1.5 overflow-y-auto p-2">
         {ranked.map(({ state, total, components }) => {
           const isSelected = selectedFips === state.fips;
           return (
