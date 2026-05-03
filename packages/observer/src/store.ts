@@ -18,6 +18,8 @@ import type {
   NegotiationView,
   ObserverEvent,
   ObserverEventKind,
+  OgStatusView,
+  OnchainBalanceView,
   ReflectionPayload,
   ShockInjectedPayload,
   StateDashboardView,
@@ -38,12 +40,73 @@ interface MeshView {
   refreshedAt: string | null;
 }
 
+interface MemoryChainBalances {
+  fetchedAt?: string;
+  blockNumber?: string;
+  chainId?: number;
+  rpc?: string;
+  walletAddress?: string;
+  nativeBalance?: string;
+  nativeBalanceRaw?: string;
+  usdcBalance?: string;
+  usdcBalanceRaw?: string;
+  usdcUsd?: number;
+  stateToken?: {
+    abbr?: string;
+    address?: string;
+    symbol?: string;
+    balance?: string;
+    balanceRaw?: string;
+    notionalUsd?: number;
+  } | null;
+  bonds?: Array<{
+    bondId?: string;
+    symbol?: string;
+    balance?: string;
+    balanceRaw?: string;
+    notionalUsd?: number;
+    address?: string;
+    couponBps?: number;
+  }>;
+  totalNotionalUsd?: number;
+  liquidReserveRatio?: number;
+}
+
+interface MemoryOgStatus {
+  fetchedAt?: string;
+  blockNumber?: string;
+  chainId?: number;
+  rpc?: string;
+  walletAddress?: string;
+  nativeBalance?: string;
+  nativeBalanceRaw?: string;
+  inft?: {
+    tokenId?: string;
+    contract?: string;
+    onchainOwner?: string;
+    expectedOwner?: string;
+    onchainUri?: string;
+    initialUri?: string;
+    rootHash?: string;
+    mintTx?: string;
+    explorerTokenUrl?: string;
+    explorerStorageUrl?: string;
+    ownerMatches?: boolean;
+  } | null;
+}
+
 interface MemoryStateFile {
   composition?: TreasuryAsset[];
   reserveRatio?: number;
   totalValueUsd?: number;
   tickCount?: number;
+  walletAddress?: string;
+  chainBalances?: MemoryChainBalances;
+  ogStatus?: MemoryOgStatus;
 }
+
+const UNICHAIN_EXPLORER =
+  process.env.UNICHAIN_EXPLORER_BASE_URL?.replace(/\/$/, '') ?? 'https://sepolia.uniscan.xyz';
 
 export class ObserverStore {
   private readonly states = new Map<number, StateDashboardView>();
@@ -80,6 +143,9 @@ export class ObserverStore {
         indicators: {},
         tick_count: null,
         last_seen_at: null,
+        wallet_address: null,
+        chain_balances: null,
+        og_status: null,
       });
     }
   }
@@ -224,6 +290,15 @@ export class ObserverStore {
           typeof parsed.tickCount === 'number' ? parsed.tickCount : state.tick_count;
         state.health = deriveHealth(state.reserve_ratio, state.indicators.unemployment?.value);
         state.last_seen_at = state.last_seen_at ?? new Date().toISOString();
+        if (typeof parsed.walletAddress === 'string') {
+          state.wallet_address = parsed.walletAddress;
+        }
+        state.chain_balances = parsed.chainBalances
+          ? projectChainBalances(parsed.chainBalances)
+          : state.chain_balances;
+        state.og_status = parsed.ogStatus
+          ? projectOgStatus(parsed.ogStatus)
+          : state.og_status;
       } catch (err) {
         this.emit('system_event', {
           level: 'warn',
@@ -351,6 +426,9 @@ export class ObserverStore {
       indicators: {},
       tick_count: null,
       last_seen_at: null,
+      wallet_address: null,
+      chain_balances: null,
+      og_status: null,
     };
     this.states.set(fips, created);
     return created;
@@ -407,6 +485,72 @@ function terminalStage(stage: NegotiationRoundPayload['stage']): boolean {
 function settlementStatus(stage: NegotiationRoundPayload['stage']): NegotiationView['status'] {
   if (stage === 'reject' || stage === 'coalition_decline') return 'rejected';
   return 'settled';
+}
+
+function projectChainBalances(parsed: MemoryChainBalances): OnchainBalanceView {
+  const wallet = parsed.walletAddress ?? '';
+  const walletExplorerUrl = wallet ? `${UNICHAIN_EXPLORER}/address/${wallet}` : undefined;
+  return {
+    fetched_at: parsed.fetchedAt ?? '',
+    block_number: parsed.blockNumber ?? '0',
+    chain_id: parsed.chainId ?? 1301,
+    rpc: parsed.rpc ?? '',
+    wallet_address: wallet,
+    native_balance: parsed.nativeBalance ?? '0',
+    usdc_balance: parsed.usdcBalance ?? '0',
+    usdc_balance_raw: parsed.usdcBalanceRaw ?? '0',
+    state_token: parsed.stateToken
+      ? {
+          abbr: parsed.stateToken.abbr ?? '',
+          address: parsed.stateToken.address ?? '',
+          symbol: parsed.stateToken.symbol ?? '',
+          balance: parsed.stateToken.balance ?? '0',
+          balance_raw: parsed.stateToken.balanceRaw ?? '0',
+          notional_usd: parsed.stateToken.notionalUsd ?? 0,
+        }
+      : null,
+    bonds: (parsed.bonds ?? []).map((b) => ({
+      bond_id: b.bondId ?? '',
+      symbol: b.symbol ?? '',
+      balance: b.balance ?? '0',
+      balance_raw: b.balanceRaw ?? '0',
+      notional_usd: b.notionalUsd ?? 0,
+      address: b.address ?? '',
+      coupon_bps: b.couponBps ?? 0,
+    })),
+    total_notional_usd: parsed.totalNotionalUsd ?? 0,
+    liquid_reserve_ratio: parsed.liquidReserveRatio ?? 0,
+    wallet_explorer_url: walletExplorerUrl,
+  };
+}
+
+function projectOgStatus(parsed: MemoryOgStatus): OgStatusView {
+  return {
+    fetched_at: parsed.fetchedAt ?? '',
+    block_number: parsed.blockNumber ?? '0',
+    chain_id: parsed.chainId ?? 16602,
+    rpc: parsed.rpc ?? '',
+    wallet_address: parsed.walletAddress ?? '',
+    native_balance: parsed.nativeBalance ?? '0',
+    wallet_explorer_url: parsed.walletAddress
+      ? `${(process.env.OG_EXPLORER_BASE_URL ?? 'https://chainscan-galileo.0g.ai').replace(/\/$/, '')}/address/${parsed.walletAddress}`
+      : undefined,
+    inft: parsed.inft
+      ? {
+          token_id: parsed.inft.tokenId ?? '',
+          contract: parsed.inft.contract ?? '',
+          onchain_owner: parsed.inft.onchainOwner ?? '',
+          expected_owner: parsed.inft.expectedOwner ?? '',
+          onchain_uri: parsed.inft.onchainUri ?? '',
+          initial_uri: parsed.inft.initialUri ?? '',
+          root_hash: parsed.inft.rootHash ?? '',
+          mint_tx: parsed.inft.mintTx ?? '',
+          explorer_token_url: parsed.inft.explorerTokenUrl,
+          explorer_storage_url: parsed.inft.explorerStorageUrl,
+          owner_matches: !!parsed.inft.ownerMatches,
+        }
+      : null,
+  };
 }
 
 function deriveHealth(

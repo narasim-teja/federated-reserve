@@ -39,6 +39,60 @@ export interface CompositionEntry {
   balance: string;
 }
 
+export interface OnchainBalanceView {
+  fetched_at: string;
+  block_number: string;
+  chain_id: number;
+  rpc: string;
+  wallet_address: string;
+  native_balance: string;
+  usdc_balance: string;
+  usdc_balance_raw: string;
+  state_token: {
+    abbr: string;
+    address: string;
+    symbol: string;
+    balance: string;
+    balance_raw: string;
+    notional_usd: number;
+  } | null;
+  bonds: Array<{
+    bond_id: string;
+    symbol: string;
+    balance: string;
+    balance_raw: string;
+    notional_usd: number;
+    address: string;
+    coupon_bps: number;
+  }>;
+  total_notional_usd: number;
+  liquid_reserve_ratio: number;
+  wallet_explorer_url?: string;
+}
+
+export interface OgStatusView {
+  fetched_at: string;
+  block_number: string;
+  chain_id: number;
+  rpc: string;
+  wallet_address: string;
+  native_balance: string;
+  wallet_explorer_url?: string;
+  inft: {
+    token_id: string;
+    contract: string;
+    onchain_owner: string;
+    expected_owner: string;
+    onchain_uri: string;
+    initial_uri: string;
+    root_hash: string;
+    mint_tx: string;
+    explorer_token_url?: string;
+    explorer_storage_url?: string;
+    owner_matches: boolean;
+  } | null;
+}
+
 export interface StateView {
   fips: number;
   abbr: string;
@@ -52,6 +106,9 @@ export interface StateView {
   composition: CompositionEntry[];
   tick_count: number | null;
   last_seen_at?: string | null;
+  wallet_address?: string | null;
+  chain_balances?: OnchainBalanceView | null;
+  og_status?: OgStatusView | null;
 }
 
 export interface InftEntry {

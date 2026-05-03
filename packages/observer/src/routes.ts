@@ -183,6 +183,37 @@ export function mountRoutes({ app, store, memoryRoot }: MountOptions): void {
   // ---------- Active NOAA shocks --------------------------------------
   app.get('/shocks', (c) => c.json({ entries: store.shockSnapshot() }));
 
+  // ---------- Onchain views (Phase 5) ---------------------------------
+  app.get('/onchain', (c) => {
+    const snapshot = store.snapshot();
+    const entries = snapshot.states
+      .filter((s) => s.wallet_address || s.chain_balances)
+      .map((s) => ({
+        fips: s.fips,
+        abbr: s.abbr,
+        name: s.name,
+        wallet_address: s.wallet_address,
+        chain_balances: s.chain_balances,
+        og_status: s.og_status,
+      }));
+    return c.json({ entries });
+  });
+
+  app.get('/onchain/:abbr', (c) => {
+    const abbr = c.req.param('abbr').toUpperCase();
+    const snapshot = store.snapshot();
+    const view = snapshot.states.find((s) => s.abbr === abbr);
+    if (!view) return c.json({ error: `unknown state abbr: ${abbr}` }, 404);
+    return c.json({
+      fips: view.fips,
+      abbr: view.abbr,
+      name: view.name,
+      wallet_address: view.wallet_address,
+      chain_balances: view.chain_balances,
+      og_status: view.og_status,
+    });
+  });
+
   // ---------- Reflections ticker --------------------------------------
   app.get('/reflections', (c) => c.json({ entries: store.reflectionsSnapshot() }));
 

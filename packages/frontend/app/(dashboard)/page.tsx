@@ -9,6 +9,7 @@ import { InftGrid } from '@/components/dashboard/inft-grid';
 import { InstabilityPanel } from '@/components/dashboard/instability-panel';
 import { MapLegend } from '@/components/dashboard/map-legend';
 import { NegotiationModal } from '@/components/dashboard/negotiation-modal';
+import { OnchainActivity } from '@/components/dashboard/onchain-activity';
 import { ReflectionTicker } from '@/components/dashboard/reflection-ticker';
 import { ShockRibbon } from '@/components/dashboard/shock-ribbon';
 import { StateDetail } from '@/components/dashboard/state-detail';
@@ -86,6 +87,10 @@ export default function LivePage() {
               states={states}
               selectedFips={selected?.fips ?? null}
               onSelect={setSelectedFips}
+            />
+            <OnchainActivity
+              swaps={snapshot?.swaps ?? []}
+              onSelectFips={setSelectedFips}
             />
             <InftGrid entries={snapshot?.infts ?? []} />
             <StrategicPosture states={states} />

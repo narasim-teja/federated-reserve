@@ -91,7 +91,7 @@ services:
       STATE_FIPS: "25"
       AXL_PEERS: "tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
     volumes:
-      - ./memory/ma/og-key.bin:/run/secrets/og_key:ro
+      - ./memory/ma:/app/memory/ma
       - ./.keys/node-ma.pem:/run/secrets/axl_key:ro
 
   # ---------------------------------------------------------------------------
@@ -107,7 +107,7 @@ services:
       STATE_FIPS: "6"
       AXL_PEERS: "tls://agent-ma:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
     volumes:
-      - ./memory/ca/og-key.bin:/run/secrets/og_key:ro
+      - ./memory/ca:/app/memory/ca
       - ./.keys/node-ca.pem:/run/secrets/axl_key:ro
 
   # ---------------------------------------------------------------------------
@@ -123,7 +123,7 @@ services:
       STATE_FIPS: "48"
       AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
     volumes:
-      - ./memory/tx/og-key.bin:/run/secrets/og_key:ro
+      - ./memory/tx:/app/memory/tx
       - ./.keys/node-tx.pem:/run/secrets/axl_key:ro
 
   # ---------------------------------------------------------------------------
@@ -139,7 +139,7 @@ services:
       STATE_FIPS: "36"
       AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
     volumes:
-      - ./memory/ny/og-key.bin:/run/secrets/og_key:ro
+      - ./memory/ny:/app/memory/ny
       - ./.keys/node-ny.pem:/run/secrets/axl_key:ro
 
   # ---------------------------------------------------------------------------
@@ -155,7 +155,7 @@ services:
       STATE_FIPS: "12"
       AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
     volumes:
-      - ./memory/fl/og-key.bin:/run/secrets/og_key:ro
+      - ./memory/fl:/app/memory/fl
       - ./.keys/node-fl.pem:/run/secrets/axl_key:ro
 
   # ---------------------------------------------------------------------------
@@ -171,7 +171,7 @@ services:
       STATE_FIPS: "17"
       AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
     volumes:
-      - ./memory/il/og-key.bin:/run/secrets/og_key:ro
+      - ./memory/il:/app/memory/il
       - ./.keys/node-il.pem:/run/secrets/axl_key:ro
 
   # ---------------------------------------------------------------------------
@@ -187,7 +187,7 @@ services:
       STATE_FIPS: "53"
       AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
     volumes:
-      - ./memory/wa/og-key.bin:/run/secrets/og_key:ro
+      - ./memory/wa:/app/memory/wa
       - ./.keys/node-wa.pem:/run/secrets/axl_key:ro
 
   # ---------------------------------------------------------------------------
@@ -203,7 +203,7 @@ services:
       STATE_FIPS: "2"
       AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-fed:9001,tls://agent-trs:9001"
     volumes:
-      - ./memory/ak/og-key.bin:/run/secrets/og_key:ro
+      - ./memory/ak:/app/memory/ak
       - ./.keys/node-ak.pem:/run/secrets/axl_key:ro
 
   # ---------------------------------------------------------------------------
@@ -220,6 +220,7 @@ services:
       AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-trs:9001"
     volumes:
       - ./.keys/node-fed.pem:/run/secrets/axl_key:ro
+      - ./memory/fed:/app/memory/fed
 
   # ---------------------------------------------------------------------------
   # Treasury (FIPS 101) — no iNFT, no og-key mount, plaintext blobs
@@ -235,6 +236,7 @@ services:
       AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001"
     volumes:
       - ./.keys/node-trs.pem:/run/secrets/axl_key:ro
+      - ./memory/trs:/app/memory/trs
 
   # ---------------------------------------------------------------------------
   # Observer — mesh peer that collects telemetry + fronts the dashboard API
@@ -257,11 +259,17 @@ services:
       MCP_ROUTER_PORT: "9003"
       OBSERVER_PORT: "3001"
       OBSERVER_MCP_PORT: "7200"
+      # Read each agent's local-mirror state.json + log.jsonl from the shared
+      # bind mount below so the dashboard can render reserve ratio, treasury
+      # value, etc. The agent containers each mount their own subdir RW; we
+      # mount the parent RO.
+      MEMORY_ROOT: /app/memory
       AXL_PEERS: "tls://agent-ma:9001,tls://agent-ca:9001,tls://agent-tx:9001,tls://agent-ny:9001,tls://agent-fl:9001,tls://agent-il:9001,tls://agent-wa:9001,tls://agent-ak:9001,tls://agent-fed:9001,tls://agent-trs:9001"
     ports:
       - "3001:3001"   # HTTP feed + websocket — frontend hits this
     volumes:
       - ./.keys/node-observer.pem:/run/secrets/axl_key:ro
+      - ./memory:/app/memory:ro
     networks:
       - mesh
     depends_on:

@@ -18,8 +18,11 @@
  */
 
 import { getPersona } from '@federated-reserve/shared';
+import type { Address } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { startA2aServer } from './a2a/server.ts';
 import { AxlClient } from './axl-client.ts';
+import { ChainReader, parseAddress } from './chain-reader.ts';
 import { describeAgent, loadConfig } from './config.ts';
 import { DataPlaneClient } from './data-plane-client.ts';
 import { MeshDiscovery } from './discovery.ts';
@@ -29,6 +32,7 @@ import { makeMcpRequestHandler } from './mcp/server.ts';
 import { makeMemory } from './memory.ts';
 import { maybeWrapWithOgAnchor } from './og-anchor-bootstrap.ts';
 import { ObserverTelemetry } from './observer-client.ts';
+import { OgReader } from './og-reader.ts';
 import { type Reasoner, getReasoner } from './reason.ts';
 import { makeInitialState } from './state.ts';
 import { buildAgentSystemPrompt } from './system-prompts.ts';
@@ -91,6 +95,65 @@ if (cfg.settlement.enabled && cfg.settlement.walletPrivateKey) {
   console.log(
     `[${cfg.state.abbr}] settlement disabled — negotiations complete with legs.responder=null`,
   );
+}
+
+// Resolve the agent's wallet address. Prefer derivation from the private key
+// (single source of truth, no env mismatch); fall back to WALLET_<ABBR>_ADDRESS
+// for read-only nodes that don't carry a signing key. ChainReader / OgReader
+// only need the address — no signing — so they work even when settlement is off.
+let walletAddress: Address | undefined;
+if (cfg.settlement.walletPrivateKey) {
+  walletAddress = privateKeyToAccount(cfg.settlement.walletPrivateKey).address;
+} else {
+  const envKey = cfg.state.abbr === 'TRS' ? 'TREASURY' : cfg.state.abbr;
+  const envAddr = process.env[`WALLET_${envKey}_ADDRESS`];
+  if (envAddr && envAddr !== '0xPLACEHOLDER') {
+    try {
+      walletAddress = parseAddress(envAddr, `WALLET_${envKey}_ADDRESS`);
+    } catch {
+      walletAddress = undefined;
+    }
+  }
+}
+
+let chainReader: ChainReader | undefined;
+if (walletAddress) {
+  try {
+    chainReader = new ChainReader({
+      rpc: cfg.settlement.rpc,
+      chainId: cfg.settlement.chainId,
+      walletAddress,
+      stateAbbr: cfg.state.abbr,
+    });
+    console.log(
+      `[${cfg.state.abbr}] chain-reader wired: wallet=${walletAddress} chain=${cfg.settlement.chainId}`,
+    );
+  } catch (err) {
+    console.warn(
+      `[${cfg.state.abbr}] ChainReader init skipped (${(err as Error).message}); composition will stay at cold-start zeros`,
+    );
+  }
+} else {
+  console.log(
+    `[${cfg.state.abbr}] chain-reader disabled — no wallet address resolved (no privKey + no WALLET_*_ADDRESS)`,
+  );
+}
+
+let ogReader: OgReader | undefined;
+if (walletAddress && process.env.OG_RPC_URL) {
+  try {
+    ogReader = new OgReader({
+      rpc: process.env.OG_RPC_URL,
+      chainId: Number(process.env.OG_CHAIN_ID ?? 16602),
+      walletAddress,
+      stateAbbr: cfg.state.abbr,
+      explorerBase: process.env.OG_EXPLORER_BASE_URL,
+      storageExplorerBase: process.env.OG_STORAGE_EXPLORER_BASE_URL,
+    });
+    console.log(`[${cfg.state.abbr}] og-reader wired: rpc=${process.env.OG_RPC_URL}`);
+  } catch (err) {
+    console.warn(`[${cfg.state.abbr}] OgReader init skipped: ${(err as Error).message}`);
+  }
 }
 
 console.log(`[${cfg.state.abbr}] starting agent: ${describeAgent(cfg)}`);
@@ -175,6 +238,9 @@ const tick = startTickLoop({
   reasoner,
   systemPrompt,
   telemetry,
+  chainReader,
+  ogReader,
+  swapExecutor,
 });
 
 // Persist initial state immediately so the file exists.

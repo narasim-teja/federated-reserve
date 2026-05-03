@@ -1,11 +1,11 @@
 'use client';
 
-import { Activity, ArrowUpRight, Coins, Gauge, Sparkles } from 'lucide-react';
+import { Activity, ArrowUpRight, Coins, ExternalLink, Gauge, Sparkles, Wallet } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { StatusDot } from '@/components/ui/status-dot';
-import { formatRatio, formatTime, formatUsd, relativeTime } from '@/lib/format';
+import { compactAddress, formatRatio, formatTime, formatUsd, relativeTime } from '@/lib/format';
 import type { Health, StateView } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -100,6 +100,63 @@ export function StateDetail({ state }: StateDetailProps) {
           />
         </div>
 
+        {state.wallet_address ? (
+          <>
+            <Separator />
+            <section>
+              <h4 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--color-fg-muted)] mb-2 flex items-center gap-2">
+                <Wallet className="h-3 w-3" />
+                Onchain
+                {state.chain_balances ? (
+                  <Badge variant="muted" className="font-mono">
+                    block #{state.chain_balances.block_number}
+                  </Badge>
+                ) : null}
+              </h4>
+              <div className="flex flex-col gap-1 text-[12px]">
+                <div className="flex items-center justify-between gap-2 rounded-md bg-[var(--color-bg-soft)]/60 px-3 py-1.5">
+                  <span className="font-mono text-[var(--color-fg-muted)]">wallet</span>
+                  <span className="flex items-center gap-2">
+                    <span className="font-mono">{compactAddress(state.wallet_address)}</span>
+                    {state.chain_balances?.wallet_explorer_url ? (
+                      <a
+                        href={state.chain_balances.wallet_explorer_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-[var(--color-cyan)] hover:underline font-mono text-[10px]"
+                      >
+                        Unichain
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ) : null}
+                  </span>
+                </div>
+                {state.chain_balances ? (
+                  <div className="flex items-center justify-between gap-2 rounded-md bg-[var(--color-bg-soft)]/60 px-3 py-1.5">
+                    <span className="font-mono text-[var(--color-fg-muted)]">USDC</span>
+                    <span className="font-mono text-[var(--color-emerald)]">
+                      {trimDecimal(state.chain_balances.usdc_balance)}{' '}
+                      <span className="text-[var(--color-fg-subtle)]">
+                        · {(state.chain_balances.liquid_reserve_ratio * 100).toFixed(1)}%
+                      </span>
+                    </span>
+                  </div>
+                ) : null}
+                {state.chain_balances?.state_token ? (
+                  <div className="flex items-center justify-between gap-2 rounded-md bg-[var(--color-bg-soft)]/60 px-3 py-1.5">
+                    <span className="font-mono text-[var(--color-fg-muted)]">
+                      {state.chain_balances.state_token.symbol}
+                    </span>
+                    <span className="font-mono text-[var(--color-cyan)]">
+                      {trimDecimal(state.chain_balances.state_token.balance)}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+            </section>
+          </>
+        ) : null}
+
         <Separator />
 
         <section>
@@ -185,6 +242,13 @@ function Stat({
       <div className="text-sm font-semibold tabular-nums truncate">{value}</div>
     </div>
   );
+}
+
+function trimDecimal(d: string): string {
+  if (!d) return '0';
+  const dot = d.indexOf('.');
+  if (dot === -1) return d;
+  return `${d.slice(0, dot)}.${d.slice(dot + 1, dot + 3)}`;
 }
 
 export function StateDetailLink({ href, label }: { href: string; label: string }) {

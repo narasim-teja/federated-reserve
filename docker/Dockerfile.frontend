@@ -41,7 +41,9 @@ COPY packages/frontend /app/packages/frontend
 
 # NEXT_PUBLIC_* must be set at build time so it's inlined into the bundle.
 ARG NEXT_PUBLIC_OBSERVER_HTTP_URL=http://localhost:3001
-ENV NEXT_PUBLIC_OBSERVER_HTTP_URL=$NEXT_PUBLIC_OBSERVER_HTTP_URL
+ARG NEXT_PUBLIC_OBSERVER_WS_URL=ws://localhost:3001/ws
+ENV NEXT_PUBLIC_OBSERVER_HTTP_URL=$NEXT_PUBLIC_OBSERVER_HTTP_URL \
+    NEXT_PUBLIC_OBSERVER_WS_URL=$NEXT_PUBLIC_OBSERVER_WS_URL
 
 WORKDIR /app/packages/frontend
 RUN bun run build

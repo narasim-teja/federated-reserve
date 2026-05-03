@@ -12,6 +12,8 @@
  */
 
 import type { ShareEconomicIndicatorInput, StateSnapshot } from '@federated-reserve/shared';
+import type { ChainBalances } from './chain-reader.ts';
+import type { OgStatus } from './og-reader.ts';
 
 export interface TreasuryAsset {
   asset: string;
@@ -45,23 +47,70 @@ export interface AgentState {
    * information worth re-reflecting on.
    */
   lastReflectionHash?: string;
+  /** Hex address this agent transacts from (Unichain Sepolia + 0G Galileo). */
+  walletAddress?: string;
+  /** Last successful Unichain Sepolia balance snapshot. */
+  chainBalances?: ChainBalances;
+  /** Last successful 0G Galileo status read. */
+  ogStatus?: OgStatus;
+  /** Tick at which the autonomous rebalance policy last fired a swap. */
+  lastAutoSwapTick?: number;
 }
 
 const RECEIVED_INDICATORS_CAP = 200;
 
 export function makeInitialState(stateFips: number): AgentState {
-  // Phase 2 stub treasury — Phase 3 swaps these for real onchain balances.
+  // Cold-start defaults. Real numbers replace these on the first
+  // ChainReader.refresh() that succeeds (see tick.ts). We keep harmless
+  // placeholders so the dashboard renders something on a brand-new mesh
+  // before the first RPC roundtrip lands.
   return {
     composition: [
-      { asset: 'USDC', balance: '1000000000000' },
-      { asset: 'TBILL', balance: '500000000000' },
-      { asset: 'EQUITY', balance: '250000000000' },
+      { asset: 'USDC', balance: '0' },
+      { asset: 'STATE_TOKEN', balance: '0' },
     ],
-    reserveRatio: 0.124,
-    totalValueUsd: 1_750_000 + stateFips * 1_000,
+    reserveRatio: 0,
+    totalValueUsd: 0,
     receivedIndicators: [],
     tickCount: 0,
+    // FIPS read so the cold-start file has at least an opinion about region;
+    // this gets immediately overwritten by the first chain refresh.
+    lastAutoSwapTick: -stateFips, // negative sentinel; never matches a real tick
   };
+}
+
+/**
+ * Project a `ChainBalances` reading onto the persisted treasury fields the
+ * dashboard renders (`composition`, `totalValueUsd`, `reserveRatio`).
+ *
+ * Convention:
+ *   - composition[0] is always USDC (raw 6-decimal base units, like before)
+ *   - composition[1] is the agent's own state token (raw 18-decimal)
+ *   - subsequent entries are bond holdings the agent owns
+ *   - totalValueUsd = USDC + state-token-at-par + sum(bond notional)
+ *   - reserveRatio  = USDC / totalValueUsd  (what fraction of holdings is liquid stable)
+ */
+export function applyChainBalances(state: AgentState, b: ChainBalances): void {
+  const next: TreasuryAsset[] = [
+    { asset: 'USDC', balance: b.usdcBalanceRaw },
+  ];
+  if (b.stateToken) {
+    next.push({ asset: b.stateToken.symbol, balance: b.stateToken.balanceRaw });
+  }
+  for (const bond of b.bonds) {
+    next.push({ asset: bond.symbol, balance: bond.balanceRaw });
+  }
+  state.composition = next;
+  state.totalValueUsd = b.totalNotionalUsd;
+  state.reserveRatio = b.liquidReserveRatio;
+  state.chainBalances = b;
+  state.walletAddress = b.walletAddress;
+}
+
+export function applyOgStatus(state: AgentState, og: OgStatus): void {
+  state.ogStatus = og;
+  // Keep walletAddress in sync — same wallet is used on both chains.
+  if (!state.walletAddress) state.walletAddress = og.walletAddress;
 }
 
 /** Push with cap so memory doesn't grow unbounded across many ticks. */

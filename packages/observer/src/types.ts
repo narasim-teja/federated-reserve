@@ -108,6 +108,61 @@ export interface ReflectionPayload {
   emitted_at: string;
 }
 
+export interface OnchainBalanceView {
+  fetched_at: string;
+  block_number: string;
+  chain_id: number;
+  rpc: string;
+  wallet_address: string;
+  native_balance: string;
+  usdc_balance: string;
+  usdc_balance_raw: string;
+  state_token: {
+    abbr: string;
+    address: string;
+    symbol: string;
+    balance: string;
+    balance_raw: string;
+    notional_usd: number;
+  } | null;
+  bonds: Array<{
+    bond_id: string;
+    symbol: string;
+    balance: string;
+    balance_raw: string;
+    notional_usd: number;
+    address: string;
+    coupon_bps: number;
+  }>;
+  total_notional_usd: number;
+  liquid_reserve_ratio: number;
+  /** Pre-built explorer URL for the wallet on Unichain Sepolia. */
+  wallet_explorer_url?: string;
+}
+
+export interface OgStatusView {
+  fetched_at: string;
+  block_number: string;
+  chain_id: number;
+  rpc: string;
+  wallet_address: string;
+  native_balance: string;
+  wallet_explorer_url?: string;
+  inft: {
+    token_id: string;
+    contract: string;
+    onchain_owner: string;
+    expected_owner: string;
+    onchain_uri: string;
+    initial_uri: string;
+    root_hash: string;
+    mint_tx: string;
+    explorer_token_url?: string;
+    explorer_storage_url?: string;
+    owner_matches: boolean;
+  } | null;
+}
+
 export interface StateDashboardView {
   fips: number;
   abbr: string;
@@ -124,6 +179,12 @@ export interface StateDashboardView {
   >;
   tick_count: number | null;
   last_seen_at: string | null;
+  /** Phase 5 — agent's wallet across both chains. */
+  wallet_address: string | null;
+  /** Phase 5 — last successful Unichain Sepolia balance read. */
+  chain_balances: OnchainBalanceView | null;
+  /** Phase 5 — last successful 0G Galileo status read. */
+  og_status: OgStatusView | null;
 }
 
 export interface InftManifestEntry {

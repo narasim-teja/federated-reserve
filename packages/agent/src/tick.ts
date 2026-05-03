@@ -15,19 +15,24 @@ import { randomUUID } from 'node:crypto';
 import {
   type ShockEvent,
   type StateSnapshot,
+  loadDeployments,
   lookupStateByFips,
   pickBroadcastIndicator,
 } from '@federated-reserve/shared';
+import type { Address } from 'viem';
 import type { AxlClient } from './axl-client.ts';
 import { broadcastFedRate, broadcastIndicator } from './broadcast.ts';
+import type { ChainReader } from './chain-reader.ts';
 import type { AgentConfig } from './config.ts';
 import type { DataPlaneClient } from './data-plane-client.ts';
 import type { MeshDiscovery } from './discovery.ts';
+import type { SwapExecutor } from './execute.ts';
 import type { AgentMemory } from './memory.ts';
 import type { ObserverTelemetry } from './observer-client.ts';
+import type { OgReader } from './og-reader.ts';
 import type { Reasoner } from './reason.ts';
 import { runReflection } from './reflect.ts';
-import type { AgentState } from './state.ts';
+import { type AgentState, applyChainBalances, applyOgStatus } from './state.ts';
 
 export interface TickDeps {
   cfg: AgentConfig;
@@ -40,6 +45,12 @@ export interface TickDeps {
   /** System prompt baked at startup; passed to the reasoner on every call. */
   systemPrompt: string;
   telemetry?: ObserverTelemetry;
+  /** Phase 5 — Unichain Sepolia balance reader (USDC, state token, bonds). */
+  chainReader?: ChainReader;
+  /** Phase 5 — 0G Galileo status reader (native + iNFT tokenURI). */
+  ogReader?: OgReader;
+  /** Optional swap executor; reused for the autonomous rebalance policy. */
+  swapExecutor?: SwapExecutor;
 }
 
 export function startTickLoop(deps: TickDeps): { stop: () => void } {
@@ -55,6 +66,20 @@ export function startTickLoop(deps: TickDeps): { stop: () => void } {
   // fan-out `coordinate-shock-response` over A2A to the affected leaves.
   const shockSweepEveryN = Number(process.env.SHOCK_SWEEP_EVERY_N ?? '6');
   const recentlyInjectedShocks = new Set<string>();
+
+  // Onchain refresh cadence — every Nth tick. Default 5 ≈ 2.5min @ 30s ticks.
+  const chainRefreshEveryN = Number(process.env.CHAIN_REFRESH_EVERY_N_TICKS ?? '5');
+  const ogRefreshEveryN = Number(process.env.OG_REFRESH_EVERY_N_TICKS ?? '10');
+  // Autonomous rebalance — fire a real Trading-API swap if the live reserve
+  // ratio has drifted off-target by `bps`. Conservative defaults; off
+  // entirely if AUTO_REBALANCE_ENABLED=0 or if we lack a swap executor.
+  const autoRebalanceEnabled =
+    process.env.AUTO_REBALANCE_ENABLED !== '0' && !!deps.swapExecutor;
+  const targetReserveRatio = Number(process.env.AUTO_REBALANCE_TARGET ?? '0.20');
+  const driftBps = Number(process.env.AUTO_REBALANCE_DRIFT_BPS ?? '500'); // 5%
+  const minSwapUsdc = BigInt(process.env.AUTO_REBALANCE_MIN_USDC ?? '50000000'); // 50 USDC
+  const maxSwapUsdc = BigInt(process.env.AUTO_REBALANCE_MAX_USDC ?? '500000000'); // 500 USDC
+  const autoCooldownTicks = Number(process.env.AUTO_REBALANCE_COOLDOWN_TICKS ?? '12');
 
   const tick = async () => {
     if (stopped) return;
@@ -79,6 +104,32 @@ export function startTickLoop(deps: TickDeps): { stop: () => void } {
           state.ownSnapshot = snapshot;
           await broadcastFromSnapshot(deps, snapshot, tickNo);
         }
+      }
+
+      // Onchain reads — every Nth tick or on cold start (when balances absent).
+      if (deps.chainReader && (state.chainBalances == null || tickNo % chainRefreshEveryN === 0)) {
+        await refreshOnchainBalances(deps, tickNo);
+      }
+      if (deps.ogReader && (state.ogStatus == null || tickNo % ogRefreshEveryN === 0)) {
+        await refreshOgStatus(deps, tickNo);
+      }
+
+      // Autonomous rebalance — only if reads succeeded and the agent has a
+      // swap executor wired. Off entirely on FED/TRS (no state token).
+      if (
+        autoRebalanceEnabled &&
+        !isFederal &&
+        deps.chainReader &&
+        deps.swapExecutor &&
+        state.chainBalances
+      ) {
+        await maybeAutoRebalance(deps, tickNo, {
+          targetReserveRatio,
+          driftBps,
+          minSwapUsdc,
+          maxSwapUsdc,
+          cooldownTicks: autoCooldownTicks,
+        });
       }
 
       // Reflection cadence — log-based summary using OpenRouter (when enabled).
@@ -385,4 +436,241 @@ async function broadcastFromSnapshot(
     summary: `${picked.kind}=${picked.obs.value} from ${picked.obs.source} → ${ok}/${results.length} peers`,
     details: { tick: tickNo, input, results },
   });
+}
+
+/** Phase 5 — replace stub composition with real on-chain numbers. */
+async function refreshOnchainBalances(deps: TickDeps, tickNo: number): Promise<void> {
+  const { cfg, state, memory, chainReader } = deps;
+  if (!chainReader) return;
+  const before = state.chainBalances?.fetchedAt;
+  const next = await chainReader.refresh();
+  if (!next) return; // RPC failure already logged inside the reader
+  const prevTotal = state.totalValueUsd;
+  applyChainBalances(state, next);
+  const drift =
+    prevTotal === 0 ? 1 : Math.abs(state.totalValueUsd - prevTotal) / prevTotal;
+  const stateTokenLine = next.stateToken
+    ? `${next.stateToken.symbol}=${trim(next.stateToken.balance)}`
+    : 'no-state-token';
+  console.log(
+    `[${cfg.state.abbr}] tick ${tickNo}: chain refresh @ block ${next.blockNumber}: ` +
+      `USDC=${trim(next.usdcBalance)} ${stateTokenLine} bonds=${next.bonds.length} ` +
+      `total=$${next.totalNotionalUsd.toFixed(0)} ratio=${(next.liquidReserveRatio * 100).toFixed(1)}%`,
+  );
+  // Log only on cold-start or when the value moved >1% since last refresh —
+  // otherwise the log gets spammy across a long demo.
+  if (!before || drift > 0.01) {
+    await memory.appendLog({
+      kind: 'decision',
+      at: next.fetchedAt,
+      summary:
+        `onchain_balance_refresh @ block ${next.blockNumber}: $${next.totalNotionalUsd.toFixed(0)} ` +
+        `(reserve ${(next.liquidReserveRatio * 100).toFixed(1)}%)`,
+      details: {
+        tick: tickNo,
+        wallet: next.walletAddress,
+        usdc: next.usdcBalance,
+        stateToken: next.stateToken
+          ? { symbol: next.stateToken.symbol, balance: next.stateToken.balance }
+          : null,
+        bonds: next.bonds.map((b) => ({ id: b.bondId, balance: b.balance })),
+        totalUsd: next.totalNotionalUsd,
+        reserveRatio: next.liquidReserveRatio,
+      },
+    });
+  }
+}
+
+async function refreshOgStatus(deps: TickDeps, tickNo: number): Promise<void> {
+  const { cfg, state, memory, ogReader } = deps;
+  if (!ogReader) return;
+  const before = state.ogStatus?.fetchedAt;
+  const next = await ogReader.refresh();
+  if (!next) return;
+  applyOgStatus(state, next);
+  console.log(
+    `[${cfg.state.abbr}] tick ${tickNo}: 0G refresh @ block ${next.blockNumber}: ` +
+      `native=${trim(next.nativeBalance)} 0G ` +
+      (next.inft
+        ? `iNFT #${next.inft.tokenId} owner=${shortAddr(next.inft.onchainOwner)} ${next.inft.ownerMatches ? '✓' : '✗ MISMATCH'}`
+        : 'no-iNFT'),
+  );
+  if (!before) {
+    await memory.appendLog({
+      kind: 'decision',
+      at: next.fetchedAt,
+      summary: `0G read: native=${trim(next.nativeBalance)} 0G; iNFT ${
+        next.inft ? `#${next.inft.tokenId}` : 'unminted'
+      }`,
+      details: {
+        tick: tickNo,
+        wallet: next.walletAddress,
+        native: next.nativeBalance,
+        inft: next.inft,
+      },
+    });
+  }
+}
+
+interface RebalanceConfig {
+  targetReserveRatio: number;
+  driftBps: number;
+  minSwapUsdc: bigint;
+  maxSwapUsdc: bigint;
+  cooldownTicks: number;
+}
+
+/**
+ * Real autonomous rebalance — fires a Trading-API swap when the live reserve
+ * ratio (USDC / total notional) drifts off-target by more than `driftBps`.
+ *
+ *   ratio < target − driftBps → buy USDC: sell `state-token` for USDC
+ *   ratio > target + driftBps → buy state-token: sell USDC for `state-token`
+ *
+ * The swap size is min(|gap| × totalUsd, max), clamped to [min, max]. Skips
+ * when the agent has no state-token balance (sell side empty) or zero USDC
+ * (buy side empty).
+ */
+async function maybeAutoRebalance(
+  deps: TickDeps,
+  tickNo: number,
+  cfg: RebalanceConfig,
+): Promise<void> {
+  const { cfg: agentCfg, state, memory, swapExecutor, telemetry } = deps;
+  if (!swapExecutor || !state.chainBalances) return;
+
+  // Cooldown — don't churn swaps every tick.
+  if (
+    state.lastAutoSwapTick != null &&
+    state.lastAutoSwapTick > 0 &&
+    tickNo - state.lastAutoSwapTick < cfg.cooldownTicks
+  ) {
+    return;
+  }
+
+  const ratio = state.chainBalances.liquidReserveRatio;
+  const targetMin = cfg.targetReserveRatio - cfg.driftBps / 10_000;
+  const targetMax = cfg.targetReserveRatio + cfg.driftBps / 10_000;
+  if (ratio >= targetMin && ratio <= targetMax) return;
+
+  const stateToken = state.chainBalances.stateToken;
+  if (!stateToken) return;
+
+  const deployments = loadDeployments('unichain-sepolia');
+  const usdcAddr = deployments.contracts.MockUSDC.address as Address;
+  const stAddr = stateToken.address;
+
+  const usdcRaw = BigInt(state.chainBalances.usdcBalanceRaw);
+  const stRaw = BigInt(stateToken.balanceRaw);
+
+  let direction: 'buy_usdc' | 'sell_usdc';
+  let amountIn: bigint;
+  let tokenIn: Address;
+  let tokenOut: Address;
+
+  if (ratio < targetMin) {
+    // Need more USDC — sell state token. Size the swap to roughly close the
+    // gap, but expressed in state-token units (18 decimals; 1 token = $1 par).
+    direction = 'buy_usdc';
+    const gapUsd = (cfg.targetReserveRatio - ratio) * state.chainBalances.totalNotionalUsd;
+    const tokenAmountUsd = clampUsdc(
+      BigInt(Math.floor(gapUsd * 1_000_000)),
+      cfg.minSwapUsdc,
+      cfg.maxSwapUsdc,
+    );
+    // Convert USDC notional → 18-decimal state-token amount: multiply by 10^12.
+    amountIn = tokenAmountUsd * 1_000_000_000_000n;
+    tokenIn = stAddr;
+    tokenOut = usdcAddr;
+    if (amountIn > stRaw) amountIn = stRaw;
+    if (amountIn === 0n) return;
+  } else {
+    direction = 'sell_usdc';
+    const gapUsd = (ratio - cfg.targetReserveRatio) * state.chainBalances.totalNotionalUsd;
+    amountIn = clampUsdc(
+      BigInt(Math.floor(gapUsd * 1_000_000)),
+      cfg.minSwapUsdc,
+      cfg.maxSwapUsdc,
+    );
+    tokenIn = usdcAddr;
+    tokenOut = stAddr;
+    if (amountIn > usdcRaw) amountIn = usdcRaw;
+    if (amountIn === 0n) return;
+  }
+
+  console.log(
+    `[${agentCfg.state.abbr}] auto-rebalance tick ${tickNo}: ratio=${(ratio * 100).toFixed(1)}% ` +
+      `target=${(cfg.targetReserveRatio * 100).toFixed(1)}% → ${direction} amount=${amountIn}`,
+  );
+
+  try {
+    const result = await swapExecutor.swap({ tokenIn, tokenOut, amount: amountIn });
+    state.lastAutoSwapTick = tickNo;
+    const explorerBase = (
+      process.env.UNICHAIN_EXPLORER_BASE_URL ?? 'https://sepolia.uniscan.xyz'
+    ).replace(/\/$/, '');
+    const explorerUrl = `${explorerBase}/tx/${result.txHash}`;
+    await memory.appendLog({
+      kind: 'decision',
+      at: new Date().toISOString(),
+      summary: `auto-rebalance ${direction} → ${result.txHash.slice(0, 12)}…`,
+      details: {
+        tick: tickNo,
+        direction,
+        ratio,
+        target: cfg.targetReserveRatio,
+        tokenIn,
+        tokenOut,
+        amountIn: amountIn.toString(),
+        expectedOut: result.expectedOut.toString(),
+        txHash: result.txHash,
+        explorerUrl,
+        status: result.status,
+      },
+    });
+    telemetry?.reportSwapExecuted({
+      from_fips: agentCfg.state.fips,
+      to_fips: agentCfg.state.fips, // self-trade
+      give: { asset: tokenIn === usdcAddr ? 'USDC' : stateToken.symbol, amount: amountIn.toString() },
+      receive: {
+        asset: tokenOut === usdcAddr ? 'USDC' : stateToken.symbol,
+        amount: result.expectedOut.toString(),
+      },
+      tx_hash: result.txHash,
+      explorer_url: explorerUrl,
+    });
+    // Refresh balances right away so the next tick sees the new ratio and
+    // doesn't re-trigger.
+    if (deps.chainReader) {
+      const next = await deps.chainReader.refresh();
+      if (next) applyChainBalances(state, next);
+    }
+  } catch (err) {
+    console.warn(
+      `[${agentCfg.state.abbr}] auto-rebalance failed: ${(err as Error).message.slice(0, 240)}`,
+    );
+    await memory.appendLog({
+      kind: 'decision',
+      at: new Date().toISOString(),
+      summary: `auto-rebalance failed: ${(err as Error).message.slice(0, 120)}`,
+      details: { tick: tickNo, direction, ratio, target: cfg.targetReserveRatio, error: String(err) },
+    });
+  }
+}
+
+function clampUsdc(value: bigint, lo: bigint, hi: bigint): bigint {
+  if (value < lo) return lo;
+  if (value > hi) return hi;
+  return value;
+}
+
+function trim(decimal: string): string {
+  // "1234.56789" → "1234.57"; cheap display compaction
+  const dot = decimal.indexOf('.');
+  if (dot === -1) return decimal;
+  return decimal.slice(0, dot + 3);
+}
+
+function shortAddr(addr: string): string {
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }

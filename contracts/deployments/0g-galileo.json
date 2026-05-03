@@ -82,15 +82,24 @@
       "state_abbr": "MA",
       "state_name": "Massachusetts",
       "state_fips": 25,
-      "owner_address": "0x2926E2afC40a62829960C002eEe8F54eb4cEAC88",
-      "encrypted_uri": "0g://7ff5801e52b20a53a3533b3b2abc393298f7ea00918b298bb619979bf5dddf57",
-      "root_hash": "0x7ff5801e52b20a53a3533b3b2abc393298f7ea00918b298bb619979bf5dddf57",
-      "metadata_hash": "0x9e9d695eae62a28ef0b0e093988af694ab43b5c30948c0430f797dae5287916e",
-      "sealed_key": "0x04590ce91742845145d4c7a6543cb9d983666739d6e360b257cc9d3c7cf0a353b58f434aad7ebf0c6dc30c3546003e4659e5aa72843b7c20357879c35a723852fe9db9304e13075bfcafbbee39a22bde75ce462f0f4242ee53692ecbe5e1ab86234b3948dffa6513c1e7dca2d0786d10182efa6dd970ddaedf7bbd58ef",
+      "owner_address": "0x1983d02B3e16076FB1A51A8a9809a9B688a8aBf6",
+      "encrypted_uri": "0g://7c06eeae367d75363dafa4c8fbbd82d0277db1d31803e42a3c87aaf7d6d9cfdc",
+      "root_hash": "0x7c06eeae367d75363dafa4c8fbbd82d0277db1d31803e42a3c87aaf7d6d9cfdc",
+      "metadata_hash": "0x60bdb6ee92b11aa1e8121efe25e2c2abfd1007b1a487e7422239068cc620d57f",
+      "sealed_key": "0x04847315a852ce8476313531b8ff2da5002fc07e2fea044d1debc80ed54abaa78f7933febac896e4d14970f3f743729da2c4c4c0239f84935c39b570cade850c36cc7808d01f31fa049622681f2ecdc70e537cd22166a006ba8b602cf2922a4455be80a668845b29762f52edb8506b16be363c41d10b416653ed45f6fe",
       "mint_tx": "0x7cc984d814562b6c3a702289d3f25a526d86e0dfd5605a98bbf6e456950234e3",
       "bundle_bytes": 61302,
       "encrypted_bytes": 61330,
-      "minted_at": "2026-05-01T22:17:03.367Z"
+      "minted_at": "2026-05-01T22:17:03.367Z",
+      "transfer_history": [
+        {
+          "from": "0x2926E2afC40a62829960C002eEe8F54eb4cEAC88",
+          "to": "0x1983d02B3e16076FB1A51A8a9809a9B688a8aBf6",
+          "tx": "0x18800e59ac34ad6ff5579a8555dc34be3b43cd5e79acc416d2608029b2ba30a8",
+          "explorer": "https://chainscan-galileo.0g.ai/tx/0x18800e59ac34ad6ff5579a8555dc34be3b43cd5e79acc416d2608029b2ba30a8",
+          "at": "2026-05-01T22:24:04.829Z"
+        }
+      ]
     },
     "NY": {
       "tokenId": "36",

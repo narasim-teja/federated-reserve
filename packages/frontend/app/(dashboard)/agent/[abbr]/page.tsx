@@ -22,6 +22,7 @@ import { ReserveGauge } from '@/components/charts/reserve-gauge';
 import { StateSilhouette } from '@/components/charts/state-silhouette';
 import { TreasuryBar } from '@/components/charts/treasury-bar';
 import { NegotiationModal } from '@/components/dashboard/negotiation-modal';
+import { OnchainPanel } from '@/components/dashboard/onchain-panel';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -267,6 +268,13 @@ export default function AgentDossierPage() {
                 )}
               </CardContent>
             </Card>
+
+            {/* Onchain wallet & balances */}
+            <OnchainPanel
+              walletAddress={live?.wallet_address ?? null}
+              chainBalances={live?.chain_balances ?? null}
+              ogStatus={live?.og_status ?? null}
+            />
 
             {/* Peer signals */}
             <Card>
