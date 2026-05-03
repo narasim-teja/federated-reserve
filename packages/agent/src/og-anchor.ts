@@ -88,6 +88,8 @@ interface AnchorRecord {
   rootHash: string;
   metadataHash: Hex;
   storageTx: string;
+  /** 0G Storage sequence number — resolves /submission/<txSeq> on storagescan. */
+  txSeq?: string;
   updateMetadataTx: string;
   bundleBytes: number;
   encryptedBytes: number;
@@ -276,6 +278,7 @@ export class OgAnchoredMemory implements AgentMemory {
       rootHash: upload.rootHash,
       metadataHash,
       storageTx: upload.txHash,
+      txSeq: upload.txSeq != null ? String(upload.txSeq) : undefined,
       updateMetadataTx: tx,
       bundleBytes: plaintext.length,
       encryptedBytes: cipher.blob.length,
@@ -291,6 +294,18 @@ export class OgAnchoredMemory implements AgentMemory {
       reserveRatio: state.reserveRatio,
       totalValueUsd: state.totalValueUsd,
       compositionKey: this.compositionKey(state),
+    };
+    // Persist the anchor onto the same AgentState the caller is holding so
+    // the next tick's saveState writes it to disk → observer hydrates it →
+    // dashboard shows a live `/submission/<txSeq>` link to the freshest blob.
+    state.lastAnchor = {
+      rootHash: record.rootHash,
+      txSeq: record.txSeq,
+      storageTx: record.storageTx,
+      updateMetadataTx: record.updateMetadataTx,
+      reason: record.reason,
+      tickCount: record.tickCount,
+      at: record.at,
     };
     // Best-effort: log the anchor as a memory event so the frontend feed sees it.
     await this.base

@@ -55,6 +55,27 @@ export interface AgentState {
   ogStatus?: OgStatus;
   /** Tick at which the autonomous rebalance policy last fired a swap. */
   lastAutoSwapTick?: number;
+  /**
+   * Most recent successful 0G iNFT anchor — populated by the og-anchor
+   * pipeline after each `INFT7857.updateMetadata` call. Surfaces the *live*
+   * blob/submission identifiers so the dashboard can link to the freshest
+   * anchor instead of the original mint-time rootHash.
+   */
+  lastAnchor?: {
+    rootHash: string;
+    /** Storage sequence number — what /submission/<txSeq> resolves on storagescan. */
+    txSeq?: string;
+    /** 0G Storage submission tx hash (separate from `updateMetadataTx`). */
+    storageTx: string;
+    /** updateMetadata() tx on the iNFT contract. */
+    updateMetadataTx: string;
+    /** Anchor reason ("cold-start", "decision", "heartbeat-7-ticks", etc.). */
+    reason: string;
+    /** Tick that produced this anchor. */
+    tickCount: number;
+    /** ISO-8601 timestamp. */
+    at: string;
+  };
 }
 
 const RECEIVED_INDICATORS_CAP = 200;

@@ -183,6 +183,60 @@ export function OnchainPanel({ walletAddress, chainBalances, ogStatus }: Onchain
                     </>
                   ) : null}
                 </dl>
+                {ogStatus.latest_anchor ? (
+                  <div className="mt-2 border-t border-[var(--color-border)] pt-2">
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--color-violet)]">
+                        latest anchor · tick #{ogStatus.latest_anchor.tick_count}
+                      </span>
+                      <Badge variant="violet" className="font-mono">
+                        {ogStatus.latest_anchor.reason}
+                      </Badge>
+                    </div>
+                    <dl className="grid grid-cols-[64px_1fr] gap-x-2 gap-y-0.5 font-mono text-[10.5px]">
+                      <dt className="text-[var(--color-fg-subtle)]">root</dt>
+                      <dd className="truncate text-[var(--color-fg)]">
+                        {compactHash(ogStatus.latest_anchor.root_hash)}
+                      </dd>
+                      <dt className="text-[var(--color-fg-subtle)]">links</dt>
+                      <dd className="flex flex-wrap items-center gap-2 truncate">
+                        {ogStatus.latest_anchor.submission_url ? (
+                          <a
+                            href={ogStatus.latest_anchor.submission_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[var(--color-cyan)] hover:underline"
+                          >
+                            blob
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ) : null}
+                        {ogStatus.latest_anchor.storage_tx_url ? (
+                          <a
+                            href={ogStatus.latest_anchor.storage_tx_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[var(--color-cyan)] hover:underline"
+                          >
+                            storage tx
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ) : null}
+                        {ogStatus.latest_anchor.update_metadata_tx_url ? (
+                          <a
+                            href={ogStatus.latest_anchor.update_metadata_tx_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[var(--color-cyan)] hover:underline"
+                          >
+                            updateMetadata
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ) : null}
+                      </dd>
+                    </dl>
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </>

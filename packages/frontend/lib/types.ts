@@ -70,6 +70,19 @@ export interface OnchainBalanceView {
   wallet_explorer_url?: string;
 }
 
+export interface LatestAnchorView {
+  root_hash: string;
+  tx_seq?: string;
+  storage_tx: string;
+  update_metadata_tx: string;
+  reason: string;
+  tick_count: number;
+  at: string;
+  submission_url?: string;
+  storage_tx_url?: string;
+  update_metadata_tx_url?: string;
+}
+
 export interface OgStatusView {
   fetched_at: string;
   block_number: string;
@@ -91,6 +104,7 @@ export interface OgStatusView {
     explorer_storage_url?: string;
     owner_matches: boolean;
   } | null;
+  latest_anchor: LatestAnchorView | null;
 }
 
 export interface StateView {

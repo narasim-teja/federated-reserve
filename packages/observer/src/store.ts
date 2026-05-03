@@ -95,6 +95,16 @@ interface MemoryOgStatus {
   } | null;
 }
 
+interface MemoryLastAnchor {
+  rootHash?: string;
+  txSeq?: string;
+  storageTx?: string;
+  updateMetadataTx?: string;
+  reason?: string;
+  tickCount?: number;
+  at?: string;
+}
+
 interface MemoryStateFile {
   composition?: TreasuryAsset[];
   reserveRatio?: number;
@@ -103,6 +113,7 @@ interface MemoryStateFile {
   walletAddress?: string;
   chainBalances?: MemoryChainBalances;
   ogStatus?: MemoryOgStatus;
+  lastAnchor?: MemoryLastAnchor;
 }
 
 const UNICHAIN_EXPLORER =
@@ -307,7 +318,7 @@ export class ObserverStore {
           ? projectChainBalances(parsed.chainBalances)
           : state.chain_balances;
         state.og_status = parsed.ogStatus
-          ? projectOgStatus(parsed.ogStatus)
+          ? projectOgStatus(parsed.ogStatus, parsed.lastAnchor)
           : state.og_status;
       } catch (err) {
         this.emit('system_event', {
@@ -542,7 +553,17 @@ function projectChainBalances(parsed: MemoryChainBalances): OnchainBalanceView {
   };
 }
 
-function projectOgStatus(parsed: MemoryOgStatus): OgStatusView {
+function projectOgStatus(
+  parsed: MemoryOgStatus,
+  lastAnchor: MemoryLastAnchor | undefined,
+): OgStatusView {
+  const chainBase = (process.env.OG_EXPLORER_BASE_URL ?? 'https://chainscan-galileo.0g.ai').replace(
+    /\/$/,
+    '',
+  );
+  const storageBase = (
+    process.env.OG_STORAGE_EXPLORER_BASE_URL ?? 'https://storagescan-galileo.0g.ai'
+  ).replace(/\/$/, '');
   return {
     fetched_at: parsed.fetchedAt ?? '',
     block_number: parsed.blockNumber ?? '0',
@@ -551,7 +572,7 @@ function projectOgStatus(parsed: MemoryOgStatus): OgStatusView {
     wallet_address: parsed.walletAddress ?? '',
     native_balance: parsed.nativeBalance ?? '0',
     wallet_explorer_url: parsed.walletAddress
-      ? `${(process.env.OG_EXPLORER_BASE_URL ?? 'https://chainscan-galileo.0g.ai').replace(/\/$/, '')}/address/${parsed.walletAddress}`
+      ? `${chainBase}/address/${parsed.walletAddress}`
       : undefined,
     inft: parsed.inft
       ? {
@@ -566,6 +587,26 @@ function projectOgStatus(parsed: MemoryOgStatus): OgStatusView {
           explorer_token_url: parsed.inft.explorerTokenUrl,
           explorer_storage_url: parsed.inft.explorerStorageUrl,
           owner_matches: !!parsed.inft.ownerMatches,
+        }
+      : null,
+    latest_anchor: lastAnchor?.rootHash
+      ? {
+          root_hash: lastAnchor.rootHash,
+          tx_seq: lastAnchor.txSeq,
+          storage_tx: lastAnchor.storageTx ?? '',
+          update_metadata_tx: lastAnchor.updateMetadataTx ?? '',
+          reason: lastAnchor.reason ?? '',
+          tick_count: lastAnchor.tickCount ?? 0,
+          at: lastAnchor.at ?? '',
+          submission_url: lastAnchor.txSeq
+            ? `${storageBase}/submission/${lastAnchor.txSeq}`
+            : undefined,
+          storage_tx_url: lastAnchor.storageTx
+            ? `${chainBase}/tx/${lastAnchor.storageTx}`
+            : undefined,
+          update_metadata_tx_url: lastAnchor.updateMetadataTx
+            ? `${chainBase}/tx/${lastAnchor.updateMetadataTx}`
+            : undefined,
         }
       : null,
   };

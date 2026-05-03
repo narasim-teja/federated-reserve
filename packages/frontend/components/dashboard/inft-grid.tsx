@@ -4,14 +4,22 @@ import { ExternalLink, WalletCards } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { compactAddress, compactHash } from '@/lib/format';
-import type { InftEntry } from '@/lib/types';
+import { compactAddress, compactHash, relativeTime } from '@/lib/format';
+import type { InftEntry, LatestAnchorView, StateView } from '@/lib/types';
 
 interface InftGridProps {
   entries: InftEntry[];
+  /** Live state views — used to surface each agent's freshest 0G anchor. */
+  states?: StateView[];
 }
 
-export function InftGrid({ entries }: InftGridProps) {
+function pickLatestAnchor(states: StateView[] | undefined, abbr: string): LatestAnchorView | null {
+  if (!states) return null;
+  const match = states.find((s) => s.abbr === abbr);
+  return match?.og_status?.latest_anchor ?? null;
+}
+
+export function InftGrid({ entries, states }: InftGridProps) {
   return (
     <Card className="h-full">
       <CardHeader>
@@ -28,6 +36,7 @@ export function InftGrid({ entries }: InftGridProps) {
           <ul className="grid grid-cols-1 gap-2 p-3">
             {entries.map((entry) => {
               const minted = entry.mint_status === 'minted';
+              const latestAnchor = pickLatestAnchor(states, entry.state_abbr);
               return (
                 <li
                   key={entry.state_abbr}
@@ -92,23 +101,48 @@ export function InftGrid({ entries }: InftGridProps) {
                         </dd>
                       </>
                     )}
-                    {entry.onchain?.storage_blob_url && (
+                    {(latestAnchor?.submission_url || entry.onchain?.storage_blob_url) && (
                       <>
                         <dt className="text-[var(--color-fg-subtle)]">0G blob</dt>
                         <dd className="truncate text-[var(--color-fg)]">
                           <a
-                            href={entry.onchain.storage_blob_url}
+                            href={latestAnchor?.submission_url ?? entry.onchain?.storage_blob_url ?? '#'}
                             target="_blank"
                             rel="noreferrer"
                             className="text-[var(--color-cyan)] hover:underline inline-flex items-center gap-1"
                           >
-                            {compactHash(entry.onchain.storage_root_hash)}
+                            {compactHash(latestAnchor?.root_hash ?? entry.onchain?.storage_root_hash ?? '')}
                             <ExternalLink className="h-3 w-3" />
                           </a>
                         </dd>
                       </>
                     )}
                   </dl>
+                  {latestAnchor ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-[var(--color-border)] pt-2 font-mono text-[10px]">
+                      <Badge variant="violet">latest anchor</Badge>
+                      <span className="text-[var(--color-fg-muted)]">
+                        tick #{latestAnchor.tick_count}
+                      </span>
+                      <span className="text-[var(--color-fg-subtle)]">·</span>
+                      <span className="text-[var(--color-fg-muted)]">{latestAnchor.reason}</span>
+                      <span className="text-[var(--color-fg-subtle)]">·</span>
+                      <span className="text-[var(--color-fg-subtle)]">
+                        {relativeTime(latestAnchor.at)}
+                      </span>
+                      {latestAnchor.update_metadata_tx_url ? (
+                        <a
+                          href={latestAnchor.update_metadata_tx_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="ml-auto text-[var(--color-cyan)] hover:underline inline-flex items-center gap-1"
+                        >
+                          updateMetadata tx
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </li>
               );
             })}

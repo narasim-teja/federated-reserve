@@ -1,13 +1,40 @@
 'use client';
 
-import { useEffect, useMemo } from 'react';
-import { useUsAtlas, useStateLookup } from '@/hooks/use-us-atlas';
+import { useStateLookup, useUsAtlas } from '@/hooks/use-us-atlas';
 import { lookupStateByFips } from '@/lib/states';
 import type { Health, StateView, SwapEvent } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { Minus, Plus, RotateCcw } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const VIEWBOX_W = 975;
 const VIEWBOX_H = 610;
+const MIN_VB_W = VIEWBOX_W / 6;
+const ASPECT = VIEWBOX_H / VIEWBOX_W;
+const DEFAULT_VB = { x: 0, y: 0, w: VIEWBOX_W, h: VIEWBOX_H };
+
+interface ViewBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function clampVb(v: ViewBox): ViewBox {
+  const w = Math.max(MIN_VB_W, Math.min(VIEWBOX_W, v.w));
+  const h = w * ASPECT;
+  const x = Math.max(0, Math.min(VIEWBOX_W - w, v.x));
+  const y = Math.max(0, Math.min(VIEWBOX_H - h, v.y));
+  return { x, y, w, h };
+}
+
+function zoomCentered(v: ViewBox, factor: number): ViewBox {
+  const cx = v.x + v.w / 2;
+  const cy = v.y + v.h / 2;
+  const w = v.w * factor;
+  const h = w * ASPECT;
+  return clampVb({ x: cx - w / 2, y: cy - h / 2, w, h });
+}
 
 function compactAmount(raw: string, asset: string): string {
   // USDC and StateTokens both use 6 decimals in agent state. Strip them and
@@ -39,8 +66,10 @@ interface GeoMapProps {
 }
 
 const FILL: Record<Health, string> = {
-  green: 'fill-[color-mix(in_oklch,var(--color-emerald)_22%,transparent)] hover:fill-[color-mix(in_oklch,var(--color-emerald)_36%,transparent)]',
-  amber: 'fill-[color-mix(in_oklch,var(--color-amber)_24%,transparent)] hover:fill-[color-mix(in_oklch,var(--color-amber)_38%,transparent)]',
+  green:
+    'fill-[color-mix(in_oklch,var(--color-emerald)_22%,transparent)] hover:fill-[color-mix(in_oklch,var(--color-emerald)_36%,transparent)]',
+  amber:
+    'fill-[color-mix(in_oklch,var(--color-amber)_24%,transparent)] hover:fill-[color-mix(in_oklch,var(--color-amber)_38%,transparent)]',
   red: 'fill-[color-mix(in_oklch,var(--color-red)_28%,transparent)] hover:fill-[color-mix(in_oklch,var(--color-red)_42%,transparent)]',
   unknown: 'fill-[var(--color-bg-soft)] hover:fill-[var(--color-surface-elevated)]',
 };
@@ -73,6 +102,103 @@ export function GeoMap({
   const { data: atlas, error } = useUsAtlas();
   const lookup = useStateLookup(atlas);
 
+  // Zoom & pan state
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [vb, setVb] = useState<ViewBox>(DEFAULT_VB);
+  const vbRef = useRef(vb);
+  vbRef.current = vb;
+  const isPanningRef = useRef(false);
+  const panStartRef = useRef({ cx: 0, cy: 0, vbx: 0, vby: 0, moved: false });
+  const isZoomed = vb.w < VIEWBOX_W - 1;
+
+  // Wheel zoom centered on mouse — needs a native listener so we can
+  // preventDefault (React's onWheel is passive in newer React).
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = node.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      setVb((v) => {
+        const factor = e.deltaY < 0 ? 0.85 : 1.18;
+        const newW = Math.max(MIN_VB_W, Math.min(VIEWBOX_W, v.w * factor));
+        const newH = newW * ASPECT;
+        // Mouse position in viewBox coords (before zoom)
+        const vx = v.x + (mx / rect.width) * v.w;
+        const vy = v.y + (my / rect.height) * v.h;
+        const newX = vx - (mx / rect.width) * newW;
+        const newY = vy - (my / rect.height) * newH;
+        return clampVb({ x: newX, y: newY, w: newW, h: newH });
+      });
+    };
+    node.addEventListener('wheel', onWheel, { passive: false });
+    return () => node.removeEventListener('wheel', onWheel);
+  }, []);
+
+  const onPointerDown = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
+    if (e.button !== 0) return;
+    if (vbRef.current.w >= VIEWBOX_W - 1) return; // no pan when fully zoomed out
+    isPanningRef.current = true;
+    panStartRef.current = {
+      cx: e.clientX,
+      cy: e.clientY,
+      vbx: vbRef.current.x,
+      vby: vbRef.current.y,
+      moved: false,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }, []);
+
+  const onPointerMove = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
+    if (!isPanningRef.current) return;
+    const node = containerRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const dx = e.clientX - panStartRef.current.cx;
+    const dy = e.clientY - panStartRef.current.cy;
+    if (!panStartRef.current.moved && Math.hypot(dx, dy) > 4) {
+      panStartRef.current.moved = true;
+    }
+    setVb((v) => {
+      const dvx = (dx / rect.width) * v.w;
+      const dvy = (dy / rect.height) * v.h;
+      return clampVb({
+        x: panStartRef.current.vbx - dvx,
+        y: panStartRef.current.vby - dvy,
+        w: v.w,
+        h: v.h,
+      });
+    });
+  }, []);
+
+  const endPan = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
+    if (!isPanningRef.current) return;
+    isPanningRef.current = false;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* noop */
+    }
+  }, []);
+
+  // Suppress state click if a pan drag just happened.
+  const onStateClick = useCallback(
+    (fips: number) => {
+      if (panStartRef.current.moved) {
+        panStartRef.current.moved = false;
+        return;
+      }
+      onSelect(fips);
+    },
+    [onSelect],
+  );
+
+  const zoomIn = useCallback(() => setVb((v) => zoomCentered(v, 0.7)), []);
+  const zoomOut = useCallback(() => setVb((v) => zoomCentered(v, 1.4)), []);
+  const reset = useCallback(() => setVb(DEFAULT_VB), []);
+
   useEffect(() => {
     if (!arcs || arcs.length === 0 || !onArcExpire) return;
     const timers = arcs.map((arc) => setTimeout(() => onArcExpire(arc.id), 3200));
@@ -86,7 +212,8 @@ export function GeoMap({
   }, [states]);
 
   const pulses = useMemo(() => {
-    if (!atlas) return [] as Array<{ fips: number; cx: number; cy: number; key: number; health: Health }>;
+    if (!atlas)
+      return [] as Array<{ fips: number; cx: number; cy: number; key: number; health: Health }>;
     return Object.entries(pulseFor)
       .map(([fipsStr, key]) => {
         const fips = Number(fipsStr);
@@ -101,7 +228,13 @@ export function GeoMap({
           health: stateView?.health ?? 'unknown',
         };
       })
-      .filter(Boolean) as Array<{ fips: number; cx: number; cy: number; key: number; health: Health }>;
+      .filter(Boolean) as Array<{
+      fips: number;
+      cx: number;
+      cy: number;
+      key: number;
+      health: Health;
+    }>;
   }, [atlas, lookup, pulseFor, stateByFips]);
 
   if (error) {
@@ -120,15 +253,26 @@ export function GeoMap({
     );
   }
 
+  // Convert atlas viewBox coords → percent of the *current* viewBox so HTML
+  // overlay labels track zoom/pan correctly.
+  const toLeftPct = (x: number) => ((x - vb.x) / vb.w) * 100;
+  const toTopPct = (y: number) => ((y - vb.y) / vb.h) * 100;
+
+  const cursorClass = isZoomed ? (isPanningRef.current ? 'cursor-grabbing' : 'cursor-grab') : '';
+
   return (
-    <div className="relative h-full w-full">
+    <div ref={containerRef} className="relative h-full w-full overflow-hidden touch-none">
       <div className="absolute inset-0 grid-bg pointer-events-none opacity-50" />
       <svg
-        viewBox={atlas.viewBox}
+        viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
         preserveAspectRatio="xMidYMid meet"
-        className="relative h-full w-full"
+        className={cn('relative h-full w-full select-none', cursorClass)}
         role="img"
         aria-label="US state mesh map"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endPan}
+        onPointerCancel={endPan}
       >
         <defs>
           <filter id="state-glow" x="-50%" y="-50%" width="200%" height="200%">
@@ -137,7 +281,12 @@ export function GeoMap({
         </defs>
 
         {/* Country border halo */}
-        <path d={atlas.borderD} className="fill-none stroke-[var(--color-cyan)]/25" strokeWidth={3} filter="url(#state-glow)" />
+        <path
+          d={atlas.borderD}
+          className="fill-none stroke-[var(--color-cyan)]/25"
+          strokeWidth={3}
+          filter="url(#state-glow)"
+        />
 
         {/* States */}
         <g>
@@ -151,7 +300,7 @@ export function GeoMap({
               <path
                 key={feat.id}
                 d={feat.d}
-                onClick={() => onSelect(feat.fips)}
+                onClick={() => onStateClick(feat.fips)}
                 onMouseEnter={() => onHover?.(feat.fips)}
                 onMouseLeave={() => onHover?.(null)}
                 className={cn(
@@ -202,15 +351,15 @@ export function GeoMap({
         <g>
           {pulses.map(({ fips, cx, cy, key, health }) => (
             <g key={`${fips}-${key}`}>
-              <circle
-                cx={cx}
-                cy={cy}
-                r={4}
-                fill={PULSE_COLOR[health]}
-                opacity={0.7}
-              >
+              <circle cx={cx} cy={cy} r={4} fill={PULSE_COLOR[health]} opacity={0.7}>
                 <animate attributeName="r" from={4} to={22} dur="1.6s" repeatCount="indefinite" />
-                <animate attributeName="opacity" from={0.7} to={0} dur="1.6s" repeatCount="indefinite" />
+                <animate
+                  attributeName="opacity"
+                  from={0.7}
+                  to={0}
+                  dur="1.6s"
+                  repeatCount="indefinite"
+                />
               </circle>
               <circle cx={cx} cy={cy} r={2.5} fill={PULSE_COLOR[health]} />
             </g>
@@ -282,14 +431,15 @@ export function GeoMap({
 
       {/* Capital-flow labels — HTML overlay so the typography sits above SVG */}
       {arcs && arcs.length > 0 && (
-        <div className="pointer-events-none absolute inset-0">
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
           {arcs.map((arc) => {
             const to = lookup.get(arc.to_fips);
             if (!to) return null;
             const fromMeta = lookupStateByFips(arc.from_fips);
             const toMeta = lookupStateByFips(arc.to_fips);
-            const left = (to.centroid[0] / VIEWBOX_W) * 100;
-            const top = (to.centroid[1] / VIEWBOX_H) * 100;
+            const left = toLeftPct(to.centroid[0]);
+            const top = toTopPct(to.centroid[1]);
+            if (left < -10 || left > 110 || top < -10 || top > 110) return null;
             const give = arc.give ? compactAmount(arc.give.amount, arc.give.asset) : null;
             return (
               <div
@@ -314,6 +464,48 @@ export function GeoMap({
           })}
         </div>
       )}
+
+      {/* Zoom controls */}
+      <div className="absolute right-3 top-3 flex flex-col gap-1">
+        <ZoomBtn onClick={zoomIn} ariaLabel="Zoom in" disabled={vb.w <= MIN_VB_W + 1}>
+          <Plus className="h-3.5 w-3.5" />
+        </ZoomBtn>
+        <ZoomBtn onClick={zoomOut} ariaLabel="Zoom out" disabled={!isZoomed}>
+          <Minus className="h-3.5 w-3.5" />
+        </ZoomBtn>
+        <ZoomBtn onClick={reset} ariaLabel="Reset view" disabled={!isZoomed}>
+          <RotateCcw className="h-3.5 w-3.5" />
+        </ZoomBtn>
+      </div>
     </div>
+  );
+}
+
+function ZoomBtn({
+  children,
+  onClick,
+  ariaLabel,
+  disabled,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  ariaLabel: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={ariaLabel}
+      disabled={disabled}
+      className={cn(
+        'inline-flex h-7 w-7 items-center justify-center rounded border border-[var(--color-border)] bg-[var(--color-bg)]/85 text-[var(--color-fg-muted)] backdrop-blur transition-colors',
+        disabled
+          ? 'opacity-40 cursor-not-allowed'
+          : 'hover:bg-[var(--color-surface)] hover:text-[var(--color-fg)] cursor-pointer',
+      )}
+    >
+      {children}
+    </button>
   );
 }

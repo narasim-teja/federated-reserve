@@ -1,7 +1,5 @@
 'use client';
 
-import { Globe2, Maximize2 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
 import { AiInsightsPanel } from '@/components/dashboard/ai-insights';
 import { EventFeed } from '@/components/dashboard/event-feed';
 import { GeoMap } from '@/components/dashboard/geo-map';
@@ -19,6 +17,8 @@ import { useUtcClock } from '@/hooks/use-clock';
 import { useLayers } from '@/hooks/use-layers';
 import { useObserverContext } from '@/hooks/use-observer-context';
 import { FALLBACK_STATES } from '@/lib/fallback-data';
+import { Globe2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 
 const DEFAULT_FOCUS_FIPS = 25; // Massachusetts
 
@@ -78,30 +78,21 @@ export default function LivePage() {
           </section>
 
           <aside className="flex min-h-0 flex-col gap-3 overflow-y-auto bg-[var(--color-bg)]/80 backdrop-blur p-3">
-            <ReflectionTicker
-              onSelect={setSelectedFips}
-              selectedFips={selected?.fips ?? null}
-            />
+            <ReflectionTicker onSelect={setSelectedFips} selectedFips={selected?.fips ?? null} />
             <AiInsightsPanel snapshot={snapshot} />
             <InstabilityPanel
               states={states}
               selectedFips={selected?.fips ?? null}
               onSelect={setSelectedFips}
             />
-            <OnchainActivity
-              swaps={snapshot?.swaps ?? []}
-              onSelectFips={setSelectedFips}
-            />
-            <InftGrid entries={snapshot?.infts ?? []} />
+            <OnchainActivity swaps={snapshot?.swaps ?? []} onSelectFips={setSelectedFips} />
+            <InftGrid entries={snapshot?.infts ?? []} states={states} />
             <StrategicPosture states={states} />
           </aside>
         </div>
       </div>
 
-      <NegotiationModal
-        taskId={activeNegotiation}
-        onClose={() => setActiveNegotiation(null)}
-      />
+      <NegotiationModal taskId={activeNegotiation} onClose={() => setActiveNegotiation(null)} />
     </div>
   );
 }
@@ -119,12 +110,6 @@ function MapHeader() {
         <Badge variant="muted" className="font-mono">
           2D
         </Badge>
-        <button
-          type="button"
-          className="inline-flex h-6 w-6 items-center justify-center rounded border border-[var(--color-border)] text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
-        >
-          <Maximize2 className="h-3 w-3" />
-        </button>
       </div>
     </div>
   );

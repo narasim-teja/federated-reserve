@@ -140,6 +140,22 @@ export interface OnchainBalanceView {
   wallet_explorer_url?: string;
 }
 
+export interface LatestAnchorView {
+  root_hash: string;
+  tx_seq?: string;
+  storage_tx: string;
+  update_metadata_tx: string;
+  reason: string;
+  tick_count: number;
+  at: string;
+  /** Pre-built link to /submission/<txSeq> on storagescan when txSeq known. */
+  submission_url?: string;
+  /** Pre-built link to the storage submission tx on chainscan. */
+  storage_tx_url?: string;
+  /** Pre-built link to the updateMetadata tx on chainscan. */
+  update_metadata_tx_url?: string;
+}
+
 export interface OgStatusView {
   fetched_at: string;
   block_number: string;
@@ -161,6 +177,8 @@ export interface OgStatusView {
     explorer_storage_url?: string;
     owner_matches: boolean;
   } | null;
+  /** Most recent successful 0G anchor — populated by the og-anchor pipeline. */
+  latest_anchor: LatestAnchorView | null;
 }
 
 export interface StateDashboardView {
