@@ -13,6 +13,16 @@ settle as real swaps on Unichain via the Uniswap Trading API. Memory and
 learned strategy persist to 0G Storage, with each headline state-agent
 minted as an ERC-7857 iNFT — a transferable, ownable AI policymaker.
 
+## Quick links
+
+| What | Where |
+|---|---|
+| **Live demo** | [fedreserve.live](https://fedreserve.live) |
+| **iNFT contract on 0G Galileo** | [`0xbae646e0092a74821c54ea36ea342eefb6a26ae1`](https://chainscan-galileo.0g.ai/address/0xbae646e0092a74821c54ea36ea342eefb6a26ae1) |
+| **Embedded-intelligence proof** (transfer ceremony) | [docs/proof/inft-transfer-ma.json](./docs/proof/inft-transfer-ma.json) → [verification tx](https://chainscan-galileo.0g.ai/tx/0x18800e59ac34ad6ff5579a8555dc34be3b43cd5e79acc416d2608029b2ba30a8) |
+| **All 8 minted iNFTs** | see [iNFT registry](#minted-inft-registry-token-id--state-fips) below |
+| **All deployed contracts** | see [Contract addresses](#contract-addresses) below |
+
 ## Architecture
 
 ```
@@ -65,6 +75,59 @@ minted as an ERC-7857 iNFT — a transferable, ownable AI policymaker.
 | **AXL** (transport) | Encrypted P2P routing between AXL nodes | Go binary in `vendor/axl`, one node per agent |
 | **MCP** (tools) | Single-shot peer→peer calls: `query_treasury`, `share_economic_indicator`, `share_topology`, `announce_fed_rate` | `@modelcontextprotocol/sdk` + per-host MCP Router sidecar |
 | **A2A** (skills) | Multi-turn negotiations: `negotiate-bilateral-swap`, `participate-in-coalition`, `propose-bond-purchase`, `request-emergency-aid`, `coordinate-shock-response` | Custom TypeScript A2A server on `@a2a-js/sdk` (replaces the bundled Python `a2a_serving` which is single-shot only) |
+
+### How agents communicate and coordinate
+
+**Communication.** No agent has a privileged route to any other agent.
+Every inter-agent message traverses AXL, an encrypted peer-to-peer
+network where each application talks to localhost and AXL handles
+routing, encryption, and discovery across the mesh. We run **ten
+separate AXL nodes** in the local mesh, one per agent, each with its
+own ed25519 keypair and ports. On top of AXL transport we layer two
+protocols:
+
+- **MCP** for single-shot calls. An agent that wants to ask a peer "what
+  is your current treasury composition" or "tell me your view of the
+  topology" issues an MCP `tools/call` over AXL. We added a 1-hop
+  `share_topology` gossip layer because AXL's native topology view is
+  eventually-consistent; after one or two rounds the mesh converges.
+- **A2A** for multi-turn skills with full task lifecycle (`Working →
+  InputRequired → Completed`). This is where the actual coordination
+  happens. Each skill is a multi-message dance, not a single call.
+
+**Coordination.** Five A2A skills cover the coordination patterns:
+
+| Skill | Pattern | Who's involved |
+|---|---|---|
+| `negotiate-bilateral-swap` | Proposal → counter → accept/reject; up to 3 rounds | 2 agents |
+| `bond-auction` | Issuer announces, peers bid, evaluator awards in-window | 1 issuer + N bidders |
+| `participate-in-coalition` | Initiator invites, peers accept/decline/counter terms, revised invite, final response | 1 initiator + N invitees |
+| `request-emergency-aid` | Stressed state requests, peers offer or decline | 1 requester + N responders |
+| `coordinate-shock-response` | Shock signal fans out, peers commit contributions | 1 broadcaster + N responders |
+
+The shock-response loop is the most P2P-flavored: a NOAA event triggers
+a state to broadcast a `coordinate-shock-response` signal across the
+mesh, peers that have affinity (geographic, economic) commit
+contributions, and the response materializes without any central
+coordinator deciding who pays in. The bond auction is similar but
+financial: an issuer mints debt, multiple bidders compete in the same
+window, the issuer evaluates against an algorithmic credit-rating
+floor, and the winner gets the ERC-20 bond token.
+
+**Shared state.** Every agent's persona, treasury, and decision log
+persist to **0G Storage** as the durable substrate (with a local hot
+mirror for read latency). Headline agents are anchored on chain via
+their ERC-7857 iNFT, so the shared on-chain view is always
+keccak-verifiable against the off-chain bundle. See [Proof of embedded
+intelligence](#proof-of-embedded-intelligence) below.
+
+**Where to verify.** The live mesh runs at
+[fedreserve.live](https://fedreserve.live) — open the dashboard, watch
+the message feed scroll in real time, and click into any negotiation,
+bond auction, or shock fan-out as it happens. Locally,
+[scripts/test-phase4-gate.ts](./scripts/test-phase4-gate.ts) exercises
+the same flows end-to-end across the 10-node AXL mesh: multi-bidder
+bond auction, leaf↔leaf shock fan-out, multi-turn coalition.
 
 ---
 
@@ -137,6 +200,7 @@ fires `swapExecutor.swap()` and reports `tx_hash`, `block_number`,
 `token_in`, `token_out`, and the explorer URL back through the A2A status
 update.
 
+<a id="contract-addresses"></a>
 **Deployments (Unichain Sepolia, chain id 1301):**
 
 | Contract | Address |
@@ -146,7 +210,11 @@ update.
 | State Token CAT (CA) | [`0x0411752c54f84d35d99c55937fb70d66382b0645`](https://sepolia.uniscan.xyz/address/0x0411752c54f84d35d99c55937fb70d66382b0645) |
 | State Token TXT (TX) | [`0x4cdf222770c0231204446f3c516cb8664bd9948a`](https://sepolia.uniscan.xyz/address/0x4cdf222770c0231204446f3c516cb8664bd9948a) |
 | State Token NYT (NY) | [`0xb42274bbc44ffcacd746a5d5ebe7fcabfd9b53be`](https://sepolia.uniscan.xyz/address/0xb42274bbc44ffcacd746a5d5ebe7fcabfd9b53be) |
-| (full set: MA, CA, TX, NY, FL, IL, WA, AK + bonds) | [contracts/deployments/unichain-sepolia.json](./contracts/deployments/unichain-sepolia.json) |
+| State Token FLT (FL) | [`0x03d93986991d5ee4c43528f02bffad1a54172c0e`](https://sepolia.uniscan.xyz/address/0x03d93986991d5ee4c43528f02bffad1a54172c0e) |
+| State Token ILT (IL) | [`0x07655e6201a712cb92462c996334ead03540be7d`](https://sepolia.uniscan.xyz/address/0x07655e6201a712cb92462c996334ead03540be7d) |
+| State Token WAT (WA) | [`0xee38b79b622a752fd4fa8ab7b2463d0ebb35cf71`](https://sepolia.uniscan.xyz/address/0xee38b79b622a752fd4fa8ab7b2463d0ebb35cf71) |
+| State Token AKT (AK) | [`0xa0153eae2d853e7cdaedcb4ce7849ada307aeef5`](https://sepolia.uniscan.xyz/address/0xa0153eae2d853e7cdaedcb4ce7849ada307aeef5) |
+| Full manifest (incl. bond tokens) | [contracts/deployments/unichain-sepolia.json](./contracts/deployments/unichain-sepolia.json) |
 
 **5 V3 pools** seeded across StateToken×USDC at fee tier 3000. Trading API
 auto-indexes new pools in ~30s.
@@ -184,28 +252,63 @@ newer than local. Verified end-to-end on Galileo:
 | `INFT7857` | [`0xbae646e0092a74821c54ea36ea342eefb6a26ae1`](https://chainscan-galileo.0g.ai/address/0xbae646e0092a74821c54ea36ea342eefb6a26ae1) |
 | `MockOracle` | [`0xdad62bba075bc0193551c91cc5db79e558e5e5db`](https://chainscan-galileo.0g.ai/address/0xdad62bba075bc0193551c91cc5db79e558e5e5db) |
 
-**8 minted iNFTs (token id = state FIPS):**
+<a id="minted-inft-registry-token-id--state-fips"></a>
+**8 minted iNFTs (token id = state FIPS).** Each row is one minted ERC-7857
+iNFT on 0G Galileo. Token id equals the state's FIPS code so the on-chain
+identity is human-readable.
 
-| Agent | Token | Mint tx |
-|---|---|---|
-| AK | #2 | [`0xe06d76dc...`](https://chainscan-galileo.0g.ai/tx/0xe06d76dc76416f9a771ce2a3dc5abdc12f2443a36cd9f7a3a250fb717a57db75) |
-| CA | #6 | [`0xe60ae913...`](https://chainscan-galileo.0g.ai/tx/0xe60ae9139f61caf848a99e947114eaee1024163e9bf19cbbab7e221eabd2f31a) |
-| FL | #12 | [`0xdb9772c9...`](https://chainscan-galileo.0g.ai/tx/0xdb9772c9dd9d79c7dcdb5d8f6be89e3c4cad0587c157d7638b1692e142e05057) |
-| IL | #17 | [`0x25389301...`](https://chainscan-galileo.0g.ai/tx/0x25389301c5dbf19186c7405bb1220d9e39038da431be5f3cfd2c1ecb2c1ab9ae) |
-| MA | #25 | [`0x7cc984d8...`](https://chainscan-galileo.0g.ai/tx/0x7cc984d814562b6c3a702289d3f25a526d86e0dfd5605a98bbf6e456950234e3) |
-| NY | #36 | [`0x56227bb0...`](https://chainscan-galileo.0g.ai/tx/0x56227bb0ee075a8e918cf50184bcb98af2c316e70b9bb206af3d3393bb2a4aa0) |
-| TX | #48 | [`0x0769541d...`](https://chainscan-galileo.0g.ai/tx/0x0769541d18f9ccdd3e9266e0a8dc8e90f85c092d3b599884eed8e91377a0c202) |
-| WA | #53 | [`0xab178604...`](https://chainscan-galileo.0g.ai/tx/0xab17860468bf115a4619f98c2b1bc9eba90b9d424125c93aea0cb6bb34f1ddee) |
+| Agent | Token | Mint tx | Owner |
+|---|---|---|---|
+| AK | #2  | [`0xe06d76dc...`](https://chainscan-galileo.0g.ai/tx/0xe06d76dc76416f9a771ce2a3dc5abdc12f2443a36cd9f7a3a250fb717a57db75) | `0xf791...a889` |
+| CA | #6  | [`0xe60ae913...`](https://chainscan-galileo.0g.ai/tx/0xe60ae9139f61caf848a99e947114eaee1024163e9bf19cbbab7e221eabd2f31a) | `0xd842...6249` |
+| FL | #12 | [`0xdb9772c9...`](https://chainscan-galileo.0g.ai/tx/0xdb9772c9dd9d79c7dcdb5d8f6be89e3c4cad0587c157d7638b1692e142e05057) | `0x210b...0aa2` |
+| IL | #17 | [`0x25389301...`](https://chainscan-galileo.0g.ai/tx/0x25389301c5dbf19186c7405bb1220d9e39038da431be5f3cfd2c1ecb2c1ab9ae) | `0xFF09...6088` |
+| MA | #25 | [`0x7cc984d8...`](https://chainscan-galileo.0g.ai/tx/0x7cc984d814562b6c3a702289d3f25a526d86e0dfd5605a98bbf6e456950234e3) | `0x1983...aBf6` (post-transfer) |
+| NY | #36 | [`0x56227bb0...`](https://chainscan-galileo.0g.ai/tx/0x56227bb0ee075a8e918cf50184bcb98af2c316e70b9bb206af3d3393bb2a4aa0) | `0x3575...700C` |
+| TX | #48 | [`0x0769541d...`](https://chainscan-galileo.0g.ai/tx/0x0769541d18f9ccdd3e9266e0a8dc8e90f85c092d3b599884eed8e91377a0c202) | `0x6966...cE8c` |
+| WA | #53 | [`0xab178604...`](https://chainscan-galileo.0g.ai/tx/0xab17860468bf115a4619f98c2b1bc9eba90b9d424125c93aea0cb6bb34f1ddee) | `0x1cb0...2f52` |
 
-**Proof of embedded intelligence.** MA token #25 was transferred to a
+All eight live under the same iNFT contract:
+[`0xbae646e0092a74821c54ea36ea342eefb6a26ae1`](https://chainscan-galileo.0g.ai/address/0xbae646e0092a74821c54ea36ea342eefb6a26ae1).
+
+<a id="proof-of-embedded-intelligence"></a>
+### Proof of embedded intelligence
+
+The intelligence and memory are **actually** embedded in the iNFT, not
+just referenced as metadata. To show this, we ran a real ERC-7857
+transfer ceremony where the new owner re-derives the agent's full state
+from chain alone.
+
+**MA token #25** was transferred from the original deployer wallet to a
 fresh wallet via the ERC-7857 ceremony in
-[scripts/transfer-inft.ts](./scripts/transfer-inft.ts) (transfer tx
-[`0x18800e59...`](https://chainscan-galileo.0g.ai/tx/0x18800e59ac34ad6ff5579a8555dc34be3b43cd5e79acc416d2608029b2ba30a8)).
-The new owner unsealed the rotated symmetric key with their secp256k1
-private key, downloaded the encrypted bundle from 0G Storage by root hash,
-decrypted it, and verified that `keccak256(plaintext) == metadataHash`
-onchain. Receipt:
-[`.data/inft-transfers/ma.json`](./.data/inft-transfers/ma.json).
+[scripts/transfer-inft.ts](./scripts/transfer-inft.ts).
+
+| | Before transfer | After transfer |
+|---|---|---|
+| Owner | `0x2926...AC88` | `0x1983...aBf6` |
+| Sealed key | `0x04590ce9...58ef` | `0x04847315...45f6fe` |
+| Encrypted bundle URI | `0g://7c06eeae...d9cfdc` (unchanged) | `0g://7c06eeae...d9cfdc` (unchanged) |
+| Metadata hash | `0x60bdb6ee...0d57f` (unchanged) | `0x60bdb6ee...0d57f` (unchanged) |
+
+Transfer tx:
+[`0x18800e59ac34ad6ff5579a8555dc34be3b43cd5e79acc416d2608029b2ba30a8`](https://chainscan-galileo.0g.ai/tx/0x18800e59ac34ad6ff5579a8555dc34be3b43cd5e79acc416d2608029b2ba30a8).
+
+After the transfer, the new owner:
+
+1. Read the rotated `sealedKey` directly off chain.
+2. Decrypted it with their secp256k1 private key (ECIES → AES-256-GCM key recovery).
+3. Read `encryptedURI` off chain → downloaded the encrypted bundle from 0G Storage by root hash `0x7c06eeae...d9cfdc`.
+4. AES-256-GCM decrypted the bundle to plaintext.
+5. Computed `keccak256(plaintext)` and verified it equals `metadataHash` on chain (`0x60bdb6ee...0d57f`).
+6. Decoded the plaintext to recover the live MA agent: persona, treasury composition, reserve ratio, received economic indicators, and the most recent 16 reflection / decision log entries (tickCount = 512).
+
+The intelligence and memory **travelled with the token**. Without the
+token, no one (not even the original minter) can decrypt the bundle. With
+the token, the new owner gets a fully-functioning shadow MA treasurer
+with its complete decision history intact.
+
+Sanitized receipt (private key redacted, all on-chain artifacts present):
+[`docs/proof/inft-transfer-ma.json`](./docs/proof/inft-transfer-ma.json).
 
 **0G features and SDKs used:**
 
@@ -355,7 +458,7 @@ bun run scripts/smoke-execute.ts
 
 ```
 federated-reserve/
-├── docs/                      Vision (PROJECT.md), architecture (TECHNICAL.md)
+├── docs/                      Vision (PROJECT.md)
 ├── vendor/axl/                AXL Go binary (cloned + built from gensyn-ai/axl)
 ├── .venv/                     Python venv with AXL Python integrations (MCP router + A2A serving)
 ├── .keys/                     ed25519 keys for AXL nodes (gitignored)

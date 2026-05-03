@@ -1,0 +1,25 @@
+{
+  "_comment": "ERC-7857 transfer ceremony proof for the Massachusetts state-treasurer iNFT (token id 25). The recipient's private key is intentionally omitted from this published copy; the full receipt with the private key is generated locally to .data/inft-transfers/ma.json by scripts/transfer-inft.ts.",
+  "_what_this_proves": "Transferring the iNFT (a) rotates the AES-256-GCM symmetric key sealed under the new owner's secp256k1 pubkey via ECIES, (b) keeps the encrypted bundle on 0G Storage reachable by the same root hash, and (c) the new owner can unseal the rotated key, download the encrypted bundle by root hash, decrypt it, and verify keccak256(plaintext) equals metadataHash on chain. The intelligence travels with the token.",
+  "state_abbr": "MA",
+  "token_id": "25",
+  "inft_contract": "0xbae646e0092a74821c54ea36ea342eefb6a26ae1",
+  "chain": "0g-galileo-testnet",
+  "chain_id": 16602,
+  "transfer_tx": "0x18800e59ac34ad6ff5579a8555dc34be3b43cd5e79acc416d2608029b2ba30a8",
+  "transfer_explorer": "https://chainscan-galileo.0g.ai/tx/0x18800e59ac34ad6ff5579a8555dc34be3b43cd5e79acc416d2608029b2ba30a8",
+  "from": "0x2926E2afC40a62829960C002eEe8F54eb4cEAC88",
+  "to": "0x1983d02B3e16076FB1A51A8a9809a9B688a8aBf6",
+  "to_private_key_hex": "<redacted: see .data/inft-transfers/ma.json locally; private key is for a demo wallet only>",
+  "sealed_key_before": "0x04590ce91742845145d4c7a6543cb9d983666739d6e360b257cc9d3c7cf0a353b58f434aad7ebf0c6dc30c3546003e4659e5aa72843b7c20357879c35a723852fe9db9304e13075bfcafbbee39a22bde75ce462f0f4242ee53692ecbe5e1ab86234b3948dffa6513c1e7dca2d0786d10182efa6dd970ddaedf7bbd58ef",
+  "sealed_key_after": "0x04847315a852ce8476313531b8ff2da5002fc07e2fea044d1debc80ed54abaa78f7933febac896e4d14970f3f743729da2c4c4c0239f84935c39b570cade850c36cc7808d01f31fa049622681f2ecdc70e537cd22166a006ba8b602cf2922a4455be80a668845b29762f52edb8506b16be363c41d10b416653ed45f6fe",
+  "metadata_hash": "0x60bdb6ee92b11aa1e8121efe25e2c2abfd1007b1a487e7422239068cc620d57f",
+  "encrypted_uri": "0g://7c06eeae367d75363dafa4c8fbbd82d0277db1d31803e42a3c87aaf7d6d9cfdc",
+  "bundle_summary": {
+    "state_name": "Massachusetts",
+    "state_fips": 25,
+    "tickCount": 512,
+    "recent_log_entries": 16
+  },
+  "verified_at": "2026-05-01T22:24:04.829Z"
+}
