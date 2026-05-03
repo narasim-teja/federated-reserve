@@ -6,6 +6,7 @@ import {
   Brain,
   Coins,
   ExternalLink,
+  Gem,
   Handshake,
   Landmark,
   Radio,
@@ -114,9 +115,38 @@ export default function AgentDossierPage() {
                       </Badge>
                     ) : null}
                     {inft ? (
-                      <Badge variant={inft.mint_status === 'minted' ? 'emerald' : 'amber'}>
-                        iNFT {inft.mint_status}
-                      </Badge>
+                      (() => {
+                        const minted = inft.mint_status === 'minted';
+                        const href = inft.onchain?.mint_tx_url ?? inft.contract.explorer_url;
+                        const body = (
+                          <Badge
+                            variant={minted ? 'emerald' : 'amber'}
+                            className={
+                              minted && href
+                                ? 'inline-flex items-center gap-1 transition-opacity hover:opacity-80'
+                                : 'inline-flex items-center gap-1'
+                            }
+                          >
+                            <Gem className="h-3 w-3" />
+                            <span>
+                              iNFT {minted && inft.token_id != null ? `#${inft.token_id}` : ''}
+                            </span>
+                            {minted && href ? <ExternalLink className="h-2.5 w-2.5" /> : null}
+                          </Badge>
+                        );
+                        return minted && href ? (
+                          <a
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={`Open ${inft.contract.chain} explorer`}
+                          >
+                            {body}
+                          </a>
+                        ) : (
+                          body
+                        );
+                      })()
                     ) : null}
                   </div>
                 </div>

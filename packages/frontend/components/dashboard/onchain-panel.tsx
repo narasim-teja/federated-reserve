@@ -92,18 +92,43 @@ export function OnchainPanel({ walletAddress, chainBalances, ogStatus }: Onchain
                   Bond holdings
                 </h5>
                 <ul className="flex flex-col gap-1">
-                  {chainBalances.bonds.map((b) => (
-                    <li
-                      key={b.bond_id}
-                      className="flex items-center justify-between gap-2 rounded-md bg-[var(--color-bg-soft)]/60 px-3 py-1.5 text-sm"
-                    >
-                      <span className="font-mono text-[var(--color-fg)]">{b.symbol}</span>
-                      <span className="font-mono text-[var(--color-fg-muted)]">
-                        {prettyToken(b.balance)} · {(b.coupon_bps / 100).toFixed(2)}%
-                      </span>
-                    </li>
-                  ))}
+                  {chainBalances.bonds.map((b) => {
+                    const explorerUrl = `https://sepolia.uniscan.xyz/token/${b.address}`;
+                    return (
+                      <li
+                        key={b.bond_id}
+                        className="flex items-center justify-between gap-2 rounded-md bg-[var(--color-bg-soft)]/60 px-3 py-1.5 text-sm"
+                      >
+                        <a
+                          href={explorerUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={`${b.bond_id} · view on Uniscan`}
+                          className="inline-flex items-center gap-1 font-mono text-[var(--color-cyan)] hover:underline"
+                        >
+                          {b.symbol}
+                          <ExternalLink className="h-2.5 w-2.5" />
+                        </a>
+                        <div className="flex items-baseline gap-2">
+                          <span className="font-mono text-[12px] text-[var(--color-fg)]">
+                            ${b.notional_usd.toLocaleString(undefined, {
+                              maximumFractionDigits: 0,
+                            })}
+                          </span>
+                          <span
+                            className="font-mono text-[10px] text-[var(--color-fg-subtle)]"
+                            title="annual coupon"
+                          >
+                            {(b.coupon_bps / 100).toFixed(2)}% coupon
+                          </span>
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
+                <p className="font-mono text-[9.5px] text-[var(--color-fg-subtle)]">
+                  bonds held to maturity · principal repaid in USDC
+                </p>
               </>
             ) : null}
           </>

@@ -27,7 +27,11 @@ import type { AgentConfig } from './config.ts';
 import type { DataPlaneClient } from './data-plane-client.ts';
 import type { MeshDiscovery } from './discovery.ts';
 import type { SwapExecutor } from './execute.ts';
-import { maybeInitiateCoalition, maybeInitiateSwap } from './initiate.ts';
+import {
+  maybeInitiateBondBid,
+  maybeInitiateCoalition,
+  maybeInitiateSwap,
+} from './initiate.ts';
 import type { AgentMemory } from './memory.ts';
 import type { ObserverTelemetry } from './observer-client.ts';
 import type { OgReader } from './og-reader.ts';
@@ -90,7 +94,9 @@ export function startTickLoop(deps: TickDeps): { stop: () => void } {
   const initiateEnabled = process.env.INITIATE_NEGOTIATIONS_ENABLED !== '0';
   const swapEveryN = Number(process.env.NEGOTIATE_SWAP_EVERY_N_TICKS ?? '6');
   const coalitionEveryN = Number(process.env.NEGOTIATE_COALITION_EVERY_N_TICKS ?? '14');
-  const initiateOffset = cfg.state.fips % Math.max(1, Math.min(swapEveryN, coalitionEveryN));
+  const bondEveryN = Number(process.env.NEGOTIATE_BOND_EVERY_N_TICKS ?? '20');
+  const initiateOffset =
+    cfg.state.fips % Math.max(1, Math.min(swapEveryN, coalitionEveryN, bondEveryN));
 
   const tick = async () => {
     if (stopped) return;
@@ -155,6 +161,11 @@ export function startTickLoop(deps: TickDeps): { stop: () => void } {
         if ((tickNo + initiateOffset) % coalitionEveryN === 0) {
           await maybeInitiateCoalition(deps, tickNo).catch((err: unknown) => {
             console.warn(`[${cfg.state.abbr}] initiate-coalition failed: ${String(err)}`);
+          });
+        }
+        if ((tickNo + initiateOffset) % bondEveryN === 0) {
+          await maybeInitiateBondBid(deps, tickNo).catch((err: unknown) => {
+            console.warn(`[${cfg.state.abbr}] initiate-bond-bid failed: ${String(err)}`);
           });
         }
       }

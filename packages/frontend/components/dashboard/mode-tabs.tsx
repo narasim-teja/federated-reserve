@@ -15,6 +15,7 @@ interface ModeTab {
   icon: React.ReactNode;
   match: (pathname: string) => boolean;
   countKey?: 'negotiations' | 'shocks';
+  comingSoon?: boolean;
 }
 
 const TABS: ModeTab[] = [
@@ -50,9 +51,10 @@ const TABS: ModeTab[] = [
   {
     href: '/reality',
     label: 'Compare to reality',
-    hint: 'Agent decisions vs historical policymaker actions',
+    hint: 'Agent decisions vs historical policymaker actions — coming soon',
     icon: <ScrollText className="h-3.5 w-3.5" />,
     match: (p) => p.startsWith('/reality'),
+    comingSoon: true,
   },
 ];
 
@@ -104,6 +106,11 @@ export function ModeTabs() {
             {tab.countKey && count > 0 ? (
               <Badge variant={tab.countKey === 'negotiations' ? 'cyan' : 'rose'} className="ml-1">
                 {count}
+              </Badge>
+            ) : null}
+            {tab.comingSoon ? (
+              <Badge variant="muted" className="ml-1 text-[9px]">
+                soon
               </Badge>
             ) : null}
             {active ? (

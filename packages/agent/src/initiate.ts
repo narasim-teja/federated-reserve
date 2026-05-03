@@ -16,7 +16,13 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { COALITION_TAGS, getPersona, lookupStateByAbbr } from '@federated-reserve/shared';
+import {
+  COALITION_TAGS,
+  getPersona,
+  loadDeployments,
+  lookupStateByAbbr,
+  lookupStateByFips,
+} from '@federated-reserve/shared';
 import type { TickDeps } from './tick.ts';
 
 interface PeerInfo {
@@ -222,4 +228,107 @@ export async function maybeInitiateCoalition(deps: TickDeps, _tickNo: number): P
 function pickRandomChoice<T>(choices: readonly T[]): T | undefined {
   if (choices.length === 0) return undefined;
   return choices[Math.floor(Math.random() * choices.length)];
+}
+
+/**
+ * Send a bond-auction bid to a deployed bond's issuer. Picks a random
+ * bond from contracts/deployments/<chain>.json, skips bonds we issued
+ * ourselves, and bids a small principal at a yield jittered around the
+ * coupon rate so the issuer's credit floor/ceiling check has work to do.
+ *
+ * The issuer's BondAuctionRegistry batches incoming bids over a window
+ * and awards the lowest-yield eligible bid; if our bid wins, the issuer
+ * fires BondToken.mint on Unichain Sepolia, surfacing the tx_hash on
+ * the Negotiations tab.
+ */
+export async function maybeInitiateBondBid(deps: TickDeps, _tickNo: number): Promise<void> {
+  let bonds: ReturnType<typeof loadDeployments>['bonds'];
+  try {
+    const deployments = loadDeployments('unichain-sepolia');
+    bonds = deployments.bonds;
+  } catch {
+    return; // deployments missing — silent
+  }
+  if (!bonds) return;
+  const candidateIds = Object.keys(bonds).filter((id) => {
+    const b = bonds?.[id];
+    return b && b.issuerFips !== deps.cfg.state.fips;
+  });
+  if (candidateIds.length === 0) return;
+
+  const bondId = pickRandomChoice(candidateIds);
+  if (!bondId) return;
+  const bond = bonds[bondId];
+  if (!bond) return;
+
+  const issuerState = lookupStateByFips(bond.issuerFips);
+  if (!issuerState) return;
+
+  const issuerPub = await resolvePeerByAbbr(deps, issuerState.abbr);
+  if (!issuerPub) return;
+
+  // Bid a small principal (5–25% of the offered total) at a yield
+  // jittered ±50bps off the coupon. The issuer's credit reasoner will
+  // reject anything below floor or above ceiling — that's the point.
+  const fullPrincipalUsd = Number(BigInt(bond.principalUsdcBase) / 1_000_000n);
+  const principalUsd = Math.max(
+    100,
+    Math.floor(fullPrincipalUsd * (0.05 + Math.random() * 0.2)),
+  );
+  const jitterBps = Math.floor((Math.random() - 0.5) * 100); // ±50bps
+  const bidYieldBps = Math.max(50, bond.couponBps + jitterBps);
+
+  const rationale = pickRandomChoice([
+    `${deps.cfg.state.abbr} bidding for ${issuerState.abbr} treasury exposure at competitive yield.`,
+    `${deps.cfg.state.abbr} hedging interest-rate exposure with high-grade ${issuerState.abbr} paper.`,
+    `${deps.cfg.state.abbr} adding duration to the reserve via ${bond.symbol}.`,
+    `${deps.cfg.state.abbr} taking the offered ${bond.couponBps}bps coupon as a baseline; bidding ${bidYieldBps}bps to win.`,
+  ]);
+
+  const body = {
+    jsonrpc: '2.0' as const,
+    id: randomUUID(),
+    method: 'message/send' as const,
+    params: {
+      message: {
+        kind: 'message' as const,
+        role: 'user' as const,
+        messageId: randomUUID(),
+        parts: [
+          {
+            kind: 'data' as const,
+            data: {
+              skill: 'bond-auction',
+              issuer_fips: bond.issuerFips,
+              bidder_fips: deps.cfg.state.fips,
+              bond_id: bondId,
+              principal_usd: principalUsd,
+              bid_yield_bps: bidYieldBps,
+              rationale,
+            },
+          },
+        ],
+      },
+    },
+  };
+
+  try {
+    await deps.axl.callRemoteA2a(issuerPub, body);
+    console.log(
+      `[${deps.cfg.state.abbr}] initiated bond bid → ${issuerState.abbr} (${bondId}): principal=$${principalUsd} yield=${bidYieldBps}bps`,
+    );
+  } catch (err) {
+    console.warn(
+      `[${deps.cfg.state.abbr}] initiate-bond-bid to ${issuerState.abbr} failed: ${(err as Error).message.slice(0, 200)}`,
+    );
+  }
+}
+
+async function resolvePeerByAbbr(deps: TickDeps, abbr: string): Promise<string | null> {
+  const peers = deps.discovery.knownPeers();
+  for (const pubkey of peers) {
+    const info = await resolvePeer(deps, pubkey);
+    if (info?.abbr === abbr) return pubkey;
+  }
+  return null;
 }
