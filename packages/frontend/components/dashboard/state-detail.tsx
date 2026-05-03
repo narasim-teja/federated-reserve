@@ -62,7 +62,7 @@ export function StateDetail({ state }: StateDetailProps) {
         </div>
       </CardHeader>
       <CardContent className="flex-1 min-h-0 p-0">
-        <ScrollArea className="h-full max-h-[420px]">
+        <ScrollArea className="h-full">
         <div className="flex flex-col gap-4 p-4">
         <div>
           <h2 className="text-2xl font-semibold leading-tight">{state.name}</h2>

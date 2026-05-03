@@ -220,7 +220,7 @@ export function EventFeed({ events, onSelectFips, onSelectNegotiation }: EventFe
   const rows = useMemo(() => compress(filtered), [filtered]);
 
   return (
-    <Card className="h-full">
+    <Card className="h-full min-h-0">
       <CardHeader>
         <CardTitle>
           <Activity className="h-3.5 w-3.5 text-[var(--color-cyan)]" />
@@ -231,7 +231,7 @@ export function EventFeed({ events, onSelectFips, onSelectNegotiation }: EventFe
         </Badge>
       </CardHeader>
       <CardContent className="p-0">
-        <ScrollArea className="h-full max-h-[260px]">
+        <ScrollArea className="h-full">
           <ol className="divide-y divide-[var(--color-border)]">
             {rows.length === 0 ? (
               <li className="p-4 text-[12px] text-[var(--color-fg-subtle)]">

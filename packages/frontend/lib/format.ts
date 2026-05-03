@@ -57,3 +57,32 @@ export function compactHash(value: string | null | undefined): string {
   if (value.length < 16) return value;
   return `${value.slice(0, 8)}…${value.slice(-6)}`;
 }
+
+/**
+ * Render a raw on-chain integer amount in human units, picking decimals
+ * from the asset symbol. USDC is 6, all *-TOKEN state Treasury Tokens are 18.
+ * Falls back to 18 for anything else with a token-like symbol, or 0 (raw) for
+ * plain symbols we don't recognise.
+ */
+export function formatTokenAmount(raw: string, asset: string): string {
+  const decimals = asset.toUpperCase() === 'USDC' ? 6 : 18;
+  try {
+    const big = BigInt(raw);
+    const divisor = 10n ** BigInt(decimals);
+    const whole = big / divisor;
+    const frac = big % divisor;
+    const wholeNum = Number(whole);
+    if (wholeNum >= 1_000_000) return `${(wholeNum / 1_000_000).toFixed(2)}M`;
+    if (wholeNum >= 1_000) return `${(wholeNum / 1_000).toFixed(1)}k`;
+    if (wholeNum >= 1) {
+      // Show up to 2 decimals of precision when small.
+      const fracStr = (Number(frac) / Number(divisor)).toFixed(2).slice(2);
+      return fracStr === '00' ? `${wholeNum}` : `${wholeNum}.${fracStr}`;
+    }
+    // Sub-unit amounts: render as 0.xxxx (4dp).
+    const fracStr = (Number(big) / Number(divisor)).toFixed(4);
+    return fracStr;
+  } catch {
+    return raw;
+  }
+}

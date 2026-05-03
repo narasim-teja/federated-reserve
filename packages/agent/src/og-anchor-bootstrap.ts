@@ -51,11 +51,14 @@ export function maybeWrapWithOgAnchor(
     return memory;
   }
 
-  const ownerAddress = (process.env[`WALLET_${state.abbr}_ADDRESS`] ?? '') as Address;
+  // TRS uses TREASURY-prefixed wallet env vars (matches config.ts settlement
+  // remap); every other agent's env-key matches its abbr.
+  const walletEnvKey = state.abbr === 'TRS' ? 'TREASURY' : state.abbr;
+  const ownerAddress = (process.env[`WALLET_${walletEnvKey}_ADDRESS`] ?? '') as Address;
   // Each agent signs `INFT7857.updateMetadata` with its OWN wallet so nonce
   // sequences don't collide. Fall back to deployer only if the per-agent key
   // is missing (read-only nodes, demo runs without funded wallets).
-  const perAgentKey = process.env[`WALLET_${state.abbr}_PRIVATE_KEY`];
+  const perAgentKey = process.env[`WALLET_${walletEnvKey}_PRIVATE_KEY`];
   const usingPerAgent = !!perAgentKey && perAgentKey.startsWith('0x') && perAgentKey !== '0xPLACEHOLDER';
   const signerKey = (process.env.OG_ANCHOR_SIGNER_PK
     ?? (usingPerAgent ? perAgentKey : undefined)
@@ -68,7 +71,7 @@ export function maybeWrapWithOgAnchor(
   const signerSource = process.env.OG_ANCHOR_SIGNER_PK
     ? 'OG_ANCHOR_SIGNER_PK'
     : usingPerAgent
-      ? `WALLET_${state.abbr}_PRIVATE_KEY (per-agent)`
+      ? `WALLET_${walletEnvKey}_PRIVATE_KEY (per-agent)`
       : 'WALLET_DEPLOYER_PRIVATE_KEY (fallback)';
 
   const symmetricKey = loadAgentKey(keyPath);

@@ -300,6 +300,8 @@ services:
       dockerfile: docker/Dockerfile.frontend
       args:
         NEXT_PUBLIC_OBSERVER_HTTP_URL: http://localhost:3001
+        NEXT_PUBLIC_OBSERVER_WS_URL: ws://localhost:3001/ws
+        NEXT_PUBLIC_UNICHAIN_EXPLORER_BASE_URL: https://sepolia.uniscan.xyz
     image: federated-reserve/frontend:latest
     container_name: frontend
     ports:

@@ -67,7 +67,7 @@ export default function LivePage() {
                 </div>
               </div>
             </div>
-            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-3 border-t border-[var(--color-border)] p-3">
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-3 border-t border-[var(--color-border)] p-3 lg:h-[360px] shrink-0">
               <EventFeed
                 events={events}
                 onSelectFips={setSelectedFips}

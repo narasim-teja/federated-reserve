@@ -1,10 +1,10 @@
 'use client';
 
-import { ArrowLeftRight, CheckCircle2, ExternalLink, Handshake, X, XCircle } from 'lucide-react';
+import { ArrowLeftRight, ArrowRight, CheckCircle2, ExternalLink, Handshake, X, XCircle } from 'lucide-react';
 import { useEffect, useMemo, useRef } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { useObserverContext } from '@/hooks/use-observer-context';
-import { compactHash, formatTime, relativeTime } from '@/lib/format';
+import { compactHash, formatTime, formatTokenAmount, relativeTime } from '@/lib/format';
 import { lookupStateByFips } from '@/lib/states';
 import type { NegotiationRound, NegotiationStage, NegotiationView } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -178,75 +178,151 @@ function RoundBubble({ round, pivotFips }: { round: NegotiationRound; pivotFips:
   const isPivot = round.from_fips === pivotFips;
   const stageLabel = STAGE_LABEL[round.stage];
   const stageTone = STAGE_TONE[round.stage];
+  const isSettlement = round.stage === 'settlement';
+
+  const accent = isPivot
+    ? { text: 'text-[var(--color-cyan)]', border: 'border-[var(--color-cyan)]/40', bg: 'bg-[var(--color-cyan)]/5', ring: 'ring-[var(--color-cyan)]/30', avatarBg: 'bg-[var(--color-cyan)]/15' }
+    : { text: 'text-[var(--color-violet)]', border: 'border-[var(--color-violet)]/40', bg: 'bg-[var(--color-violet)]/5', ring: 'ring-[var(--color-violet)]/30', avatarBg: 'bg-[var(--color-violet)]/15' };
 
   return (
-    <li className={cn('flex w-full', isPivot ? 'justify-start' : 'justify-end')}>
+    <li className={cn('flex w-full items-end gap-2', isPivot ? 'justify-start' : 'flex-row-reverse justify-start')}>
+      <Avatar abbr={fromAbbr} accent={accent} />
       <div
         className={cn(
-          'flex max-w-[78%] flex-col gap-1.5 rounded-lg border px-3 py-2',
-          isPivot
-            ? 'rounded-bl-none border-[var(--color-cyan)]/40 bg-[var(--color-cyan)]/5'
-            : 'rounded-br-none border-[var(--color-violet)]/40 bg-[var(--color-violet)]/5',
+          'flex max-w-[78%] flex-col gap-2 rounded-2xl border px-3.5 py-2.5',
+          accent.border,
+          accent.bg,
+          isPivot ? 'rounded-bl-sm' : 'rounded-br-sm',
         )}
       >
         <div className="flex items-center justify-between gap-3">
-          <span
-            className={cn(
-              'font-mono text-[10px] font-bold tracking-[0.14em]',
-              isPivot ? 'text-[var(--color-cyan)]' : 'text-[var(--color-violet)]',
-            )}
-          >
+          <span className={cn('font-mono text-[10px] font-bold tracking-[0.14em]', accent.text)}>
             {fromAbbr}
             {to ? <span className="text-[var(--color-fg-subtle)]"> → {to.abbr}</span> : null}
           </span>
           <span className="flex items-center gap-2">
             <Badge variant={stageTone}>{stageLabel}</Badge>
             <span className="font-mono text-[10px] text-[var(--color-fg-subtle)]">
-              round {round.round} · {formatTime(round.emitted_at)}
+              r{round.round} · {formatTime(round.emitted_at)}
             </span>
           </span>
         </div>
         <p className="text-[12.5px] leading-snug text-[var(--color-fg)]">{round.summary}</p>
-        {round.terms ? <TermsPanel terms={round.terms} /> : null}
+        {round.terms ? (
+          <TermsPanel terms={round.terms} stage={round.stage} accent={accent} settlement={isSettlement} />
+        ) : null}
       </div>
     </li>
   );
 }
 
-function TermsPanel({ terms }: { terms: NonNullable<NegotiationRound['terms']> }) {
+function Avatar({ abbr, accent }: { abbr: string; accent: { text: string; avatarBg: string; ring: string } }) {
+  return (
+    <div
+      className={cn(
+        'flex h-7 w-7 shrink-0 items-center justify-center rounded-full font-mono text-[10px] font-bold tracking-tight ring-1',
+        accent.avatarBg,
+        accent.text,
+        accent.ring,
+      )}
+      title={abbr}
+    >
+      {abbr.slice(0, 2)}
+    </div>
+  );
+}
+
+function TermsPanel({
+  terms,
+  accent,
+  settlement,
+}: {
+  terms: NonNullable<NegotiationRound['terms']>;
+  stage: NegotiationStage;
+  accent: { border: string; bg: string };
+  settlement: boolean;
+}) {
   if (!terms) return null;
   const { give, receive, contribution_usd, duration_days, coalition_tag, tx_hash, explorer_url } =
     terms;
+  const hasSwap = give || receive;
+  const meta: { label: string; value: React.ReactNode }[] = [];
+  if (contribution_usd != null) meta.push({ label: 'contribution', value: `$${contribution_usd.toLocaleString()}` });
+  if (duration_days != null) meta.push({ label: 'duration', value: `${duration_days}d` });
+  if (coalition_tag) meta.push({ label: 'coalition', value: coalition_tag });
+
   return (
-    <div className="mt-1 grid grid-cols-1 gap-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)]/40 p-2 text-[11px] sm:grid-cols-2">
-      {give ? <Term label="give" value={`${give.amount} ${give.asset}`} /> : null}
-      {receive ? <Term label="receive" value={`${receive.amount} ${receive.asset}`} /> : null}
-      {contribution_usd != null ? <Term label="contribution" value={`$${contribution_usd}`} /> : null}
-      {duration_days != null ? <Term label="duration" value={`${duration_days}d`} /> : null}
-      {coalition_tag ? <Term label="coalition" value={coalition_tag} /> : null}
-      {tx_hash ? (
-        <Term
-          label="settled"
-          value={
-            <a
-              href={explorer_url ?? `https://sepolia.uniscan.xyz/tx/${tx_hash}`}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-[var(--color-cyan)] hover:underline"
-            >
-              {compactHash(tx_hash)}
-              <ExternalLink className="h-3 w-3" />
-            </a>
-          }
-        />
+    <div className="flex flex-col gap-2">
+      {hasSwap ? (
+        <div
+          className={cn(
+            'flex items-stretch gap-2 rounded-lg border bg-[var(--color-bg)]/50 p-2',
+            settlement ? 'border-[var(--color-emerald)]/35' : 'border-[var(--color-border)]',
+          )}
+        >
+          <SwapLeg label="give" leg={give} align="left" />
+          <div className="flex items-center justify-center px-1 text-[var(--color-fg-subtle)]">
+            <ArrowRight className="h-3.5 w-3.5" />
+          </div>
+          <SwapLeg label="receive" leg={receive} align="right" />
+        </div>
       ) : null}
+      {meta.length > 0 ? (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 px-1 text-[11px]">
+          {meta.map((m) => (
+            <Term key={m.label} label={m.label} value={m.value} />
+          ))}
+        </div>
+      ) : null}
+      {tx_hash ? (
+        <a
+          href={explorer_url ?? `https://sepolia.uniscan.xyz/tx/${tx_hash}`}
+          target="_blank"
+          rel="noreferrer"
+          className="group inline-flex items-center justify-between gap-2 rounded-md border border-[var(--color-emerald)]/40 bg-[var(--color-emerald)]/10 px-2.5 py-1.5 text-[11px] hover:bg-[var(--color-emerald)]/15"
+        >
+          <span className="flex items-center gap-1.5 text-[var(--color-emerald)]">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            <span className="font-mono uppercase tracking-[0.14em]">settled on Unichain</span>
+          </span>
+          <span className="flex items-center gap-1 font-mono text-[10px] text-[var(--color-fg-muted)] group-hover:text-[var(--color-fg)]">
+            {compactHash(tx_hash)}
+            <ExternalLink className="h-3 w-3" />
+          </span>
+        </a>
+      ) : null}
+    </div>
+  );
+}
+
+function SwapLeg({
+  label,
+  leg,
+  align,
+}: {
+  label: 'give' | 'receive';
+  leg: { amount: string; asset: string } | undefined;
+  align: 'left' | 'right';
+}) {
+  if (!leg) return <div className="flex-1" />;
+  return (
+    <div className={cn('flex flex-1 flex-col gap-0.5', align === 'right' && 'items-end text-right')}>
+      <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
+        {label}
+      </span>
+      <span className="font-mono text-[14px] font-semibold tabular-nums text-[var(--color-fg)] leading-none">
+        {formatTokenAmount(leg.amount, leg.asset)}
+      </span>
+      <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-[var(--color-fg-muted)]">
+        {leg.asset}
+      </span>
     </div>
   );
 }
 
 function Term({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-baseline gap-2">
+    <div className="flex items-baseline gap-1.5">
       <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--color-fg-subtle)]">
         {label}
       </span>
