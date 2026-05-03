@@ -1,33 +1,6 @@
 # FEEDBACK.md
 
-> Builder-experience notes from integrating with the **Uniswap API and
-> Developer Platform** during the Federated Reserve hackathon build.
-> Required deliverable for the Best Uniswap API Integration track.
-
-Format: each entry is timestamped and labeled with the friction or delight:
-`friction:` / `gotcha:` / `delight:` / `docs-gap:` / `bug:`.
-
-Context: Federated Reserve runs 50 AI state-treasurer agents that
-negotiate bilateral swaps and bond auctions on Unichain Sepolia. Every
-on-chain settlement goes through the Uniswap Trading API
-(`/v1/check_approval`, `/v1/quote`, `/v1/swap`) — no custom routing,
-no SDK on the hot path, no hand-rolled Permit2 plumbing. This file
-documents what we hit going from zero to a live multi-agent settlement
-loop on the Trading API.
-
 ---
-
-## 2026-04-28 — Phase 3 settlement (Trading API integration)
-
-- **`delight:` (mainnet quote round-trip is dead simple)** — POSTing
-  `{tokenIn, tokenOut, amount, type, tokenInChainId, tokenOutChainId, swapper}`
-  to `/v1/quote` with `x-api-key` and `x-universal-router-version: 2.0`
-  headers returned a full CLASSIC quote with embedded Permit2 EIP-712
-  typed data in the first attempt. No SDK needed. The
-  `permitData.values.{details, spender, sigDeadline}` shape is exactly
-  what `viem.signTypedData` consumes — the cleanest API surface I've
-  hit on this hackathon. Probe: 1 USDC → WETH on Ethereum mainnet
-  (chain 1) returned a Permit2-ready quote in <500ms.
 
 - **`docs-gap:` (testnet support claim vs. reality)** — The official
   supported-chains page (https://api-docs.uniswap.org/guides/supported_chains)
@@ -42,20 +15,6 @@ loop on the Trading API.
   "no liquidity for this pair" (the current 404). When you're trying to
   validate testnet integration before deploying contracts, this
   ambiguity costs an hour of debugging.
-
-- **`delight:` (Trading API indexes our brand-new testnet V3 pools
-  within ~30 seconds of LP)** — We deployed a fresh ERC-20 pair
-  (MockUSDC + per-state Treasury Tokens) on Unichain Sepolia (chain
-  1301), seeded a V3 pool via the canonical NonfungiblePositionManager
-  (`0xB7F724d6dDDFd008eFf5cc2834edDE5F9eF0d075`) with full-range LP at
-  fee 3000, and the Trading API's `/v1/quote` returned a complete
-  CLASSIC route through the new pool address on the very next
-  request — Permit2 EIP-712 typed data, full route metadata
-  (`route[0][0].address` exactly matched the pool we created), output
-  amount, gas estimate, all of it. No subgraph wait, no manual
-  registration. This is the best possible outcome for a hackathon —
-  freshly deployed liquidity is routable through the same API path
-  judges will see in the recording.
 
 - **`docs-gap:` (`routingPreference` schema mismatch with skill docs)** —
   The Uniswap-published `swap-integration` SKILL.md
@@ -90,19 +49,6 @@ loop on the Trading API.
   gasLimit (or surface a separate `gasLimitMin`/`gasLimitRecommended`
   pair). Real cost: ~0.001 ETH wasted, plus an hour of debugging
   before reading the trace.
-
-- **`delight:` (full quote→permit-sign→swap→broadcast loop is ~15
-  lines)** — The end-to-end Trading API flow for a CLASSIC route:
-  `POST /check_approval` returns one ERC-20 approval calldata blob,
-  `POST /quote` returns the EIP-712 typed-data permit bundle exactly
-  shaped for `viem.signTypedData({ primaryType: 'PermitSingle' })`,
-  `POST /swap` returns ready-to-broadcast tx calldata, and we sign +
-  send via viem. First swap from a fresh wallet on Unichain Sepolia:
-  1 USDC in, 0.997 MAT out, tx confirmed in ~6s
-  (`0xfa1dbe…fb706` on
-  https://unichain-sepolia.blockscout.com). Total custom Solidity:
-  zero. Total custom routing/pricing logic: zero. The API does the
-  hard parts and the SDK boundary lands exactly where you'd want it.
 
 - **`gotcha:` (RPC stale-read after `createAndInitializePoolIfNecessary`
   bricks a same-block follow-up `mint`)** — Unichain Sepolia's public

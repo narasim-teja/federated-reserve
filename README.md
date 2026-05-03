@@ -13,31 +13,6 @@ settle as real swaps on Unichain via the Uniswap Trading API. Memory and
 learned strategy persist to 0G Storage, with each headline state-agent
 minted as an ERC-7857 iNFT — a transferable, ownable AI policymaker.
 
-Full vision: [docs/PROJECT.md](./docs/PROJECT.md). Architecture and the
-seven-day plan: [docs/TECHNICAL.md](./docs/TECHNICAL.md).
-
-## Status — Phase 5 complete
-
-Local 10-agent mesh (MA, CA, TX, NY, FL, IL, WA, AK + FED + TRS) running
-the full protocol stack continuously, with:
-
-- **AXL P2P transport** — every inter-agent message (MCP + A2A) traverses
-  AXL across 10 separate nodes. No central message broker.
-- **Real onchain settlement** on Unichain Sepolia via Uniswap Trading API
-  — bilateral swaps, multi-bidder bond auctions, emergency aid transfers.
-- **8 ERC-7857 iNFTs** minted on 0G Galileo encoding each deep state-agent's
-  identity + persistent memory; transfer ceremony proven end-to-end
-  (rotated sealed key + re-decrypt + onchain hash verification).
-- **0G Storage memory backend** — agent KV state and append-only log live
-  natively on 0G with local-disk hot mirror; cold-start hydrates from 0G.
-- **LLM cost optimizations** — prompt caching (10× cheaper on cached input
-  via `cache_control`), skip-if-unchanged reflection, slowed cadence.
-  Verified ~99.9% cache hit rate on Gemini 2.5 Flash Lite.
-
-Phase reports: [docs/PHASE0_REPORT.md](./docs/PHASE0_REPORT.md),
-[docs/PHASE1_REPORT.md](./docs/PHASE1_REPORT.md), and the per-phase notes
-in [docs/TECHNICAL.md](./docs/TECHNICAL.md).
-
 ## Architecture
 
 ```
@@ -88,9 +63,9 @@ in [docs/TECHNICAL.md](./docs/TECHNICAL.md).
 
 ---
 
-## Three hackathon tracks
+## Three Layers:
 
-### 1. AXL — Best Application of Agent eXchange Layer
+### 1. AXL 
 
 Federation-of-states is literally peer-to-peer. **Every inter-agent
 message traverses AXL across 10 separate nodes.** No central broker; no
@@ -135,7 +110,7 @@ message broker hiding behind AXL's name.
 - Real bugs found upstream + fixes contributed back via FEEDBACK
 - Working tests prove leaf↔leaf, hub→leaf, and multi-turn paths
 
-### 2. Uniswap — Best Uniswap API integration
+### 2. Uniswap
 
 Every economic decision settles as a **real onchain swap** on Unichain
 Sepolia (chain id 1301) via the Uniswap Trading API.
@@ -177,17 +152,7 @@ transfer principal in the same window. Code in
 [packages/agent/src/a2a/executor.ts](./packages/agent/src/a2a/executor.ts)
 under `handleBondBid` / `evaluateBids`.
 
-**FEEDBACK.md** ([FEEDBACK.md](./FEEDBACK.md)) — required for prize
-eligibility, 343 lines of substantive builder notes including:
-
-- Quote round-trip delight: mainnet USDC→WETH < 500ms
-- Trading API testnet ambiguity (404 vs unsupported chain)
-- V3 pool auto-indexing window
-- The CLASSIC `gasLimit` bug + 25% buffer workaround
-- RPC stale-read race on `createAndInitializePoolIfNecessary` → `mint`
-- Real testnet swap tx: `0xfa1dbe…fb706`
-
-### 3. 0G — Best Autonomous Agents, Swarms & iNFT Innovations
+### 3. 0G
 
 Two complementary integrations:
 
@@ -385,7 +350,7 @@ bun run scripts/smoke-execute.ts
 
 ```
 federated-reserve/
-├── docs/                      Vision (PROJECT.md), architecture (TECHNICAL.md), phase reports
+├── docs/                      Vision (PROJECT.md), architecture (TECHNICAL.md)
 ├── vendor/axl/                AXL Go binary (cloned + built from gensyn-ai/axl)
 ├── .venv/                     Python venv with AXL Python integrations (MCP router + A2A serving)
 ├── .keys/                     ed25519 keys for AXL nodes (gitignored)
@@ -441,21 +406,3 @@ federated-reserve/
 - **Onchain settlement is asymmetric** — only the responder leg of a
   bilateral swap fires onchain via Trading API. Avoids two-phase commit
   failure modes over a P2P mesh.
-
-## Known limitations and honest gaps
-
-- **10 agents in the local mesh, not 50.** Scaling out is engineering, not
-  concept — Docker + per-agent containers on AWS ECS or Fly.io is the next
-  step. Architecture is already per-agent-isolated.
-- **0G testnet uploads are slow.** OgStorageMemory mirrors to local disk
-  first so the agent never blocks. A NonceManager-wrapped wallet handles
-  back-to-back uploads; uploads still queue under load.
-- **Verifiable compute is not integrated.** ERC-7857 oracle is a `MockOracle`;
-  reasoning has no ZK/TEE proof.
-- **Initiator-side swap leg is off-chain.** Only the responder settles
-  onchain — by design (avoids partial-failure coordination), but a future
-  two-phase commit primitive could extend this.
-
-## License
-
-Hackathon submission. Will be MIT or Apache-2.0 post-hackathon.
