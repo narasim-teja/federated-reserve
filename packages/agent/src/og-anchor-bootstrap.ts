@@ -52,11 +52,24 @@ export function maybeWrapWithOgAnchor(
   }
 
   const ownerAddress = (process.env[`WALLET_${state.abbr}_ADDRESS`] ?? '') as Address;
-  const signerKey = (process.env.OG_ANCHOR_SIGNER_PK ?? process.env.WALLET_DEPLOYER_PRIVATE_KEY ?? '') as Hex;
+  // Each agent signs `INFT7857.updateMetadata` with its OWN wallet so nonce
+  // sequences don't collide. Fall back to deployer only if the per-agent key
+  // is missing (read-only nodes, demo runs without funded wallets).
+  const perAgentKey = process.env[`WALLET_${state.abbr}_PRIVATE_KEY`];
+  const usingPerAgent = !!perAgentKey && perAgentKey.startsWith('0x') && perAgentKey !== '0xPLACEHOLDER';
+  const signerKey = (process.env.OG_ANCHOR_SIGNER_PK
+    ?? (usingPerAgent ? perAgentKey : undefined)
+    ?? process.env.WALLET_DEPLOYER_PRIVATE_KEY
+    ?? '') as Hex;
   if (!ownerAddress || !signerKey) {
     console.log(`[og-anchor] disabled — missing owner or signer env`);
     return memory;
   }
+  const signerSource = process.env.OG_ANCHOR_SIGNER_PK
+    ? 'OG_ANCHOR_SIGNER_PK'
+    : usingPerAgent
+      ? `WALLET_${state.abbr}_PRIVATE_KEY (per-agent)`
+      : 'WALLET_DEPLOYER_PRIVATE_KEY (fallback)';
 
   const symmetricKey = loadAgentKey(keyPath);
 
@@ -87,7 +100,7 @@ export function maybeWrapWithOgAnchor(
     },
   });
   console.log(
-    `[og-anchor] enabled — token=${tokenIdStr} contract=${inftAddress} signer=${signerKey.slice(0, 10)}…`,
+    `[og-anchor] enabled — token=${tokenIdStr} contract=${inftAddress} signer=${signerKey.slice(0, 10)}… via=${signerSource}`,
   );
   return wrapped;
 }

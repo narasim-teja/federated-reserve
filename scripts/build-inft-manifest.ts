@@ -96,6 +96,10 @@ interface OgMintRecord {
   bundle_bytes: number;
   encrypted_bytes: number;
   minted_at: string;
+  /** 0G Storage submission tx hash (separate from `mint_tx`). */
+  storage_submission_tx?: string;
+  /** Storage sequence number — what /submission/<txSeq> resolves on storagescan. */
+  storage_tx_seq?: string;
 }
 const OG_DEPLOYMENTS_PATH = join(ROOT, 'contracts', 'deployments', '0g-galileo.json');
 const ogDeployments: OgDeploymentsFile = (() => {
@@ -194,7 +198,25 @@ for (const state of STATES.filter((s) => s.tier === 'deep')) {
   const metadataHash = minted?.metadata_hash ?? fallbackHash;
   const tokenExplorerUrl = inftAddress.startsWith('0x') ? `${explorerBase}/address/${inftAddress}` : '';
   const mintTxUrl = minted?.mint_tx ? `${explorerBase}/tx/${minted.mint_tx}` : '';
-  const storageBlobUrl = minted?.root_hash ? `${storageExplorerBase}/tx/${minted.root_hash}` : '';
+  // Storage URL resolution priority:
+  //   1. If we recorded `storage_tx_seq` at mint time → /submission/<txSeq>
+  //      is the only path on storagescan-galileo.0g.ai that resolves blob
+  //      pages (confirmed by inspecting the SPA bundle's route table).
+  //   2. Otherwise → fall back to the chainscan iNFT token page, which shows
+  //      `tokenURI()` containing the rootHash. /tx/<rootHash> and
+  //      /file/<rootHash> on storagescan both 404 — root hash is a file
+  //      identifier, not a tx hash, and there's no public rootHash→txSeq
+  //      lookup for blobs the testnet has pruned.
+  const inftAddrOk = inftAddress.startsWith('0x');
+  const storageBlobUrl = (() => {
+    if (minted?.storage_tx_seq) {
+      return `${storageExplorerBase}/submission/${minted.storage_tx_seq}`;
+    }
+    if (inftAddrOk && minted?.tokenId) {
+      return `${explorerBase}/token/${inftAddress}?a=${minted.tokenId}`;
+    }
+    return '';
+  })();
 
   entries.push({
     state_fips: state.fips,

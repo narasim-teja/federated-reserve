@@ -263,16 +263,26 @@ export class ObserverStore {
   }
 
   updateMesh(observerPubkey: string, peers: string[]): void {
+    // Dedup: only emit a peer_update when the peer set actually changes.
+    // Otherwise the every-5s observer refresh floods the AXL live feed with
+    // identical "Mesh peers N" rows.
+    const prevPeers = this.mesh.peers;
+    const sameSet =
+      prevPeers.length === peers.length &&
+      prevPeers.every((p) => peers.includes(p)) &&
+      this.mesh.observerPubkey === observerPubkey;
     this.mesh = {
       observerPubkey,
       peers,
       refreshedAt: new Date().toISOString(),
     };
-    this.emit('peer_update', {
-      observer_pubkey: observerPubkey,
-      peer_count: peers.length,
-      peers,
-    });
+    if (!sameSet) {
+      this.emit('peer_update', {
+        observer_pubkey: observerPubkey,
+        peer_count: peers.length,
+        peers,
+      });
+    }
   }
 
   hydrateFromMemory(): void {
@@ -308,16 +318,24 @@ export class ObserverStore {
     }
   }
 
+  private lastInftManifestStamp: string | null = null;
   loadInfts(): void {
     if (!existsSync(this.manifestPath)) return;
     try {
       const manifest = JSON.parse(readFileSync(this.manifestPath, 'utf8')) as InftManifest;
       this.infts = manifest.entries ?? [];
-      this.emit('inft_manifest_updated', {
-        generated_at: manifest.generated_at,
-        count: this.infts.length,
-        mint_status: manifest.mint_status,
-      });
+      // Dedup: only emit a manifest event when generated_at advances. The
+      // 5s observer refresh otherwise spams identical "iNFT manifest sync"
+      // rows into the live feed.
+      const stamp = `${manifest.generated_at ?? ''}|${manifest.mint_status ?? ''}|${this.infts.length}`;
+      if (stamp !== this.lastInftManifestStamp) {
+        this.lastInftManifestStamp = stamp;
+        this.emit('inft_manifest_updated', {
+          generated_at: manifest.generated_at,
+          count: this.infts.length,
+          mint_status: manifest.mint_status,
+        });
+      }
     } catch (err) {
       this.emit('system_event', {
         level: 'warn',

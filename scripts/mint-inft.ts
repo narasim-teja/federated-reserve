@@ -110,6 +110,18 @@ interface MintRecord {
   bundle_bytes: number;
   encrypted_bytes: number;
   minted_at: string;
+  /**
+   * 0G Storage submission tx hash (the tx that committed the encrypted blob
+   * to the storage network — distinct from `mint_tx` which is the on-chain
+   * INFT7857.mint call).
+   */
+  storage_submission_tx?: Hex;
+  /**
+   * 0G Storage sequence number for the submission. This is the identifier
+   * `https://storagescan-galileo.0g.ai/submission/<txSeq>` resolves against;
+   * lookup by root hash isn't supported by the public storage scanner.
+   */
+  storage_tx_seq?: string;
 }
 
 const deployments = JSON.parse(readFileSync(DEPLOYMENTS_PATH, 'utf8')) as DeploymentsFile;
@@ -235,7 +247,7 @@ for (const abbr of targetAbbrs) {
   console.log(`[${abbr}] uploading to 0G Storage...`);
   const { rootHash, txHash: storageTx, txSeq } = await storage.upload(cipher.blob);
   console.log(`[${abbr}]   rootHash=${rootHash}  storageTx=${storageTx}  txSeq=${txSeq}`);
-  console.log(`[${abbr}]   storagescan: ${STORAGE_EXPLORER}/tx/${rootHash}`);
+  console.log(`[${abbr}]   storagescan: ${STORAGE_EXPLORER}/file/${rootHash}  (storage submission tx: ${STORAGE_EXPLORER}/tx/${storageTx})`);
 
   // Round-trip self-test: decrypt locally before paying for the on-chain mint.
   const symRecovered = unsealSymmetricKey(sealed, ownerPkBytes);
@@ -298,6 +310,8 @@ for (const abbr of targetAbbrs) {
     bundle_bytes: plaintext.length,
     encrypted_bytes: cipher.blob.length,
     minted_at: new Date().toISOString(),
+    storage_submission_tx: storageTx as Hex,
+    storage_tx_seq: txSeq != null ? String(txSeq) : undefined,
   };
   deployments.iNFTs![abbr] = record;
   okCount += 1;

@@ -3,6 +3,7 @@
 import { Activity, ArrowUpRight, Coins, ExternalLink, Gauge, Sparkles, Wallet } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { StatusDot } from '@/components/ui/status-dot';
 import { compactAddress, formatRatio, formatTime, formatUsd, relativeTime } from '@/lib/format';
@@ -37,7 +38,7 @@ export function StateDetail({ state }: StateDetailProps) {
   const tierBadge = state.tier === 'deep' ? 'violet' : state.tier === 'federal' ? 'cyan' : 'muted';
 
   return (
-    <Card className="h-full">
+    <Card className="h-full flex flex-col min-h-0">
       <CardHeader>
         <CardTitle>
           <StatusDot health={state.health} size={9} />
@@ -60,7 +61,9 @@ export function StateDetail({ state }: StateDetailProps) {
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4">
+      <CardContent className="flex-1 min-h-0 p-0">
+        <ScrollArea className="h-full max-h-[420px]">
+        <div className="flex flex-col gap-4 p-4">
         <div>
           <h2 className="text-2xl font-semibold leading-tight">{state.name}</h2>
           <p className="text-xs text-[var(--color-fg-muted)] mt-1 font-mono uppercase tracking-[0.14em]">
@@ -206,6 +209,8 @@ export function StateDetail({ state }: StateDetailProps) {
             </ul>
           )}
         </section>
+        </div>
+        </ScrollArea>
       </CardContent>
     </Card>
   );

@@ -20,6 +20,17 @@
 import { getPersona } from '@federated-reserve/shared';
 import type { Address } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+
+// Background pipelines (0G storage uploads, og-anchor metadata updates) can
+// throw deep inside the ethers / 0G SDK without bubbling through our top-level
+// .catch handlers — Bun's strict unhandled-rejection semantics then kill the
+// whole agent. Install a process-level guard so a transient 0G rate limit
+// can't take an agent's AXL/MCP/A2A/tick stack down with it. We log loudly
+// (one line per occurrence) but never exit.
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  console.warn(`[agent] swallowed unhandled rejection: ${msg.slice(0, 240)}`);
+});
 import { startA2aServer } from './a2a/server.ts';
 import { AxlClient } from './axl-client.ts';
 import { ChainReader, parseAddress } from './chain-reader.ts';

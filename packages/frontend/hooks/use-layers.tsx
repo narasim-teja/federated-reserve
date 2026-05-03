@@ -62,14 +62,14 @@ export const LAYERS: LayerDef[] = [
     label: 'NOAA shock events',
     icon: 'storm',
     hint: 'Storm / wildfire signals routed through the data plane',
-    eventKinds: ['system_event'],
+    eventKinds: ['shock_injected', 'system_event'],
   },
   {
     key: 'coalitions',
-    label: 'Coalition activity',
+    label: 'Coalition + settlements',
     icon: 'handshake',
-    hint: 'Multi-turn A2A negotiation rounds and bond auctions',
-    eventKinds: [],
+    hint: 'A2A negotiation rounds, on-chain swap settlements, agent reflections',
+    eventKinds: ['negotiation_round', 'swap_executed', 'reflection'],
   },
   {
     key: 'deep_only',
@@ -85,8 +85,11 @@ type LayerState = Record<LayerKey, boolean>;
 const INITIAL: LayerState = {
   indicators: true,
   fed_rate: true,
-  peer_updates: true,
-  inft_mints: true,
+  // Housekeeping events default OFF so the feed leads with real activity
+  // (broadcasts, negotiations, swaps, shocks). Toggle on if you want to
+  // watch the mesh topology / iNFT manifest churn.
+  peer_updates: false,
+  inft_mints: false,
   shocks: true,
   coalitions: true,
   deep_only: false,

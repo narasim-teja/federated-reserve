@@ -47,7 +47,7 @@ export function OnchainActivity({ swaps, onSelectFips }: OnchainActivityProps) {
             last settlement {relativeTime(lastTs)}
           </div>
         ) : null}
-        <ScrollArea className="max-h-[360px]">
+        <ScrollArea className="h-full max-h-[320px]">
           {recent.length === 0 ? (
             <p className="p-4 text-[12px] text-[var(--color-fg-subtle)]">
               No onchain settlements yet. Negotiations and autonomous rebalances will appear here as

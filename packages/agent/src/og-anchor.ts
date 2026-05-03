@@ -122,12 +122,30 @@ export class OgAnchoredMemory implements AgentMemory {
   private decisionPending = false;
   private inFlight = 0;
   private stats: OgAnchorStats = { attempts: 0, successes: 0, failures: 0, inFlight: 0 };
+  /**
+   * Set to `true` permanently after a transfer-aware revert (caller is no
+   * longer the iNFT owner). We don't try to anchor again for the lifetime of
+   * the process — re-attempting won't suddenly make the call succeed.
+   */
+  private permanentlyDisabled = false;
+  private permanentlyDisabledReason?: string;
+  /**
+   * Wall-clock at which this agent is allowed to attempt its first anchor.
+   * Without jitter, all N agents fire on tick 1 simultaneously and overwhelm
+   * 0G's RPC rate limit (50 req/window). We pseudo-random-spread by FIPS so
+   * the same agent always has the same offset (deterministic for tests).
+   */
+  private readonly startupReadyAtMs: number;
 
   constructor(opts: OgAnchorOptions) {
     this.base = opts.base;
     this.opts = opts;
     this.policy = { ...DEFAULT_OG_ANCHOR_POLICY, ...opts.policy };
     this.recentLogLimit = opts.recentLogLimit ?? 24;
+    // Spread first anchors across 0–60s based on FIPS so concurrent boots
+    // don't collide on the 0G indexer.
+    const jitterMs = (opts.stateFips * 7919) % 60_000;
+    this.startupReadyAtMs = Date.now() + jitterMs;
     if (opts.symmetricKey.length !== 32) throw new Error('symmetricKey must be 32 bytes');
     this.symmetricKey = opts.symmetricKey;
     this.storage = new OgStorage({
@@ -183,7 +201,11 @@ export class OgAnchoredMemory implements AgentMemory {
   }
 
   private anchorReason(state: AgentState): string | null {
+    if (this.permanentlyDisabled) return null;
     const now = Date.now();
+    // Startup jitter — let the deterministic per-FIPS offset spread the
+    // first-attempt thundering herd across the 0G indexer.
+    if (now < this.startupReadyAtMs) return null;
     if (this.stats.successes === 0) return 'cold-start';
     if (now - this.lastAnchorAtMs < this.policy.minIntervalMs) return null;
     if (this.decisionPending) return 'decision';
@@ -286,7 +308,22 @@ export class OgAnchoredMemory implements AgentMemory {
 
   private recordFailure(err: unknown, ctx: string): void {
     this.stats.failures += 1;
-    this.stats.lastError = `${ctx}: ${(err as Error)?.message ?? String(err)}`;
-    console.error(`[og-anchor:${this.opts.stateAbbr}] ${this.stats.lastError}`);
+    const msg = (err as Error)?.message ?? String(err);
+    this.stats.lastError = `${ctx}: ${msg}`;
+    // Detect "current owner ≠ this signer" by error shape — the iNFT was
+    // transferred away (e.g. via scripts/transfer-inft.ts), so further
+    // updateMetadata calls will keep reverting forever. Disable the anchor
+    // pipeline permanently for this process; the local memory keeps working.
+    if (
+      msg.includes('execution reverted') &&
+      msg.includes('updateMetadata')
+    ) {
+      this.permanentlyDisabled = true;
+      this.permanentlyDisabledReason = 'updateMetadata reverted (likely iNFT ownership transferred away)';
+      console.warn(
+        `[og-anchor:${this.opts.stateAbbr}] disabling anchor pipeline — ${this.permanentlyDisabledReason}`,
+      );
+    }
+    console.error(`[og-anchor:${this.opts.stateAbbr}] ${this.stats.lastError.slice(0, 240)}`);
   }
 }

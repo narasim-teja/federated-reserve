@@ -157,6 +157,16 @@ export class OgReader {
           ]);
           const expectedOwner = (this.inftRecord.owner_address ?? '') as Address;
           const rootHash = this.inftRecord.root_hash ?? '';
+          // Storage URL: prefer /submission/<txSeq> (the only storagescan
+          // route that resolves blob pages — confirmed by inspecting the
+          // SPA bundle's route table). Fall back to the chainscan iNFT
+          // token page, which renders `tokenURI()` containing the rootHash
+          // — concrete proof of the on-chain anchor without the broken
+          // /tx/<rootHash> link the storage scanner rejects.
+          const txSeq = (this.inftRecord as { storage_tx_seq?: string }).storage_tx_seq;
+          const explorerStorageUrl = txSeq
+            ? `${this.storageExplorerBase}/submission/${txSeq}`
+            : `${this.explorerBase}/token/${this.inftAddress}?a=${this.tokenId}`;
           inft = {
             tokenId: this.tokenId.toString(),
             contract: this.inftAddress,
@@ -167,9 +177,7 @@ export class OgReader {
             rootHash,
             mintTx: this.inftRecord.mint_tx ?? '',
             explorerTokenUrl: `${this.explorerBase}/token/${this.inftAddress}?a=${this.tokenId}`,
-            explorerStorageUrl: rootHash
-              ? `${this.storageExplorerBase}/tx/${rootHash}`
-              : undefined,
+            explorerStorageUrl,
             ownerMatches:
               expectedOwner.toLowerCase() === String(onchainOwner).toLowerCase(),
           };

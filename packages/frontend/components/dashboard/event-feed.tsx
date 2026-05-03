@@ -126,13 +126,18 @@ function describe(event: ObserverEvent): RowDescription {
   if (event.kind === 'peer_update') {
     const p = event.payload as PeerPayload;
     return {
-      title: `Mesh peers ${p.peer_count ?? 0}`,
-      detail: p.observer_pubkey ? `obs ${p.observer_pubkey.slice(0, 10)}…` : undefined,
+      title: `Mesh topology change → ${p.peer_count ?? 0} peers`,
+      detail: p.observer_pubkey
+        ? `observer pubkey ${p.observer_pubkey.slice(0, 12)}…`
+        : 'AXL peer set rotated',
     };
   }
   if (event.kind === 'inft_manifest_updated') {
-    const p = event.payload as { count?: number };
-    return { title: 'iNFT manifest sync', detail: `${p.count ?? 0} entries` };
+    const p = event.payload as { count?: number; mint_status?: string };
+    return {
+      title: `iNFT manifest refresh → ${p.count ?? 0} entries`,
+      detail: p.mint_status ? `status: ${p.mint_status}` : '0G persona snapshot updated',
+    };
   }
   if (event.kind === 'negotiation_round') {
     const r = event.payload as NegotiationRound;
