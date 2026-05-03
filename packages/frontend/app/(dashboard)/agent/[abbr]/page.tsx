@@ -312,15 +312,17 @@ export default function AgentDossierPage() {
                     No active or recent negotiations.
                   </p>
                 ) : (
-                  <ul className="divide-y divide-[var(--color-border)]">
-                    {data?.negotiations.slice(0, 8).map((n) => (
-                      <NegotiationRow
-                        key={n.task_id}
-                        view={n}
-                        onOpen={() => setActiveNegotiation(n.task_id)}
-                      />
-                    ))}
-                  </ul>
+                  <ScrollArea className="max-h-[360px]">
+                    <ul className="divide-y divide-[var(--color-border)]">
+                      {data?.negotiations.slice(0, 30).map((n) => (
+                        <NegotiationRow
+                          key={n.task_id}
+                          view={n}
+                          onOpen={() => setActiveNegotiation(n.task_id)}
+                        />
+                      ))}
+                    </ul>
+                  </ScrollArea>
                 )}
               </CardContent>
             </Card>

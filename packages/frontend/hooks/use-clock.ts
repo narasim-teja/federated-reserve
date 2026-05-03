@@ -2,9 +2,13 @@
 
 import { useEffect, useState } from 'react';
 
+const TZ = 'America/New_York';
+
 /**
- * UTC tick at 1 Hz. SSR-safe — first paint shows nothing until mounted to
- * avoid hydration mismatch on the seconds digit.
+ * Eastern-time tick at 1 Hz. Uses America/New_York so the label
+ * automatically swings between EDT and EST with daylight savings.
+ * SSR-safe — first paint shows nothing until mounted to avoid
+ * hydration mismatch on the seconds digit.
  */
 export function useUtcClock(): string {
   const [now, setNow] = useState<Date | null>(null);
@@ -14,15 +18,20 @@ export function useUtcClock(): string {
     return () => clearInterval(id);
   }, []);
   if (!now) return '—— —— ——';
-  const day = now.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }).toUpperCase();
+  const day = now.toLocaleDateString('en-US', { weekday: 'short', timeZone: TZ }).toUpperCase();
   const date = now
     .toLocaleDateString('en-GB', {
       day: '2-digit',
       month: 'short',
       year: 'numeric',
-      timeZone: 'UTC',
+      timeZone: TZ,
     })
     .toUpperCase();
-  const time = now.toLocaleTimeString('en-GB', { hour12: false, timeZone: 'UTC' });
-  return `${day}, ${date} ${time} UTC`;
+  const time = now.toLocaleTimeString('en-GB', { hour12: false, timeZone: TZ });
+  // Extract the live tz abbreviation (EDT in summer, EST in winter).
+  const tzLabel =
+    new Intl.DateTimeFormat('en-US', { timeZone: TZ, timeZoneName: 'short' })
+      .formatToParts(now)
+      .find((p) => p.type === 'timeZoneName')?.value ?? 'ET';
+  return `${day}, ${date} ${time} ${tzLabel}`;
 }

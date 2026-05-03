@@ -106,7 +106,25 @@ for i in {1..30}; do
   sleep 0.5
 done
 
-# Step 3: Observer Bun process (foreground)
+# Step 3: Build the iNFT manifest at startup so the dashboard's "iNFT
+# Manifest · 0G" tile + per-agent dossier resolve. Inputs (the 0G deploy
+# manifest at contracts/deployments/0g-galileo.json + read-only memory
+# mounts) are present at runtime; we don't bake the manifest at image-build
+# time because the live `lastAnchor` pipeline keeps memory state.json
+# rotating, and a baked file would freeze post-mint metadata.
+#
+# Best-effort: failure here doesn't abort observer startup — the dashboard
+# falls back to "Manifest entry pending." which is honest.
+echo "[observer] building iNFT manifest from 0G deployments"
+cd /app
+mkdir -p /app/.data
+if bun run scripts/build-inft-manifest.ts; then
+  echo "[observer]   manifest built successfully"
+else
+  echo "[observer]   manifest build failed (non-fatal); dashboard will show 'pending'"
+fi
+
+# Step 4: Observer Bun process (foreground)
 echo "[observer] starting Bun observer on http :${OBSERVER_PORT} mcp :${OBSERVER_MCP_PORT}"
 cd /app/packages/observer
 exec bun run src/index.ts

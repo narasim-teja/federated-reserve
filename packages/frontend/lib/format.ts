@@ -28,6 +28,7 @@ export function formatTime(value: string | null | undefined): string {
     minute: '2-digit',
     second: '2-digit',
     hour12: false,
+    timeZone: 'America/New_York',
   }).format(new Date(value));
 }
 

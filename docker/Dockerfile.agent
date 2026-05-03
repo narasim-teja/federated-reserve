@@ -73,6 +73,16 @@ COPY packages/shared   packages/shared
 COPY packages/og-inft  packages/og-inft
 COPY packages/agent    packages/agent
 COPY packages/observer packages/observer
+# Deployment manifests — chain-reader walks up looking for
+# contracts/deployments/<chain>.json; og-anchor-bootstrap looks for the
+# 0G one. Bake them into the image so containers don't need a host mount.
+COPY contracts/deployments contracts/deployments
+
+# Bake scripts/ in too — the observer entrypoint regenerates the iNFT
+# manifest at startup (so .data/inft-manifest.json reflects the freshest
+# 0g-galileo.json + any host-mounted memory dirs without baking the
+# manifest at image-build time).
+COPY scripts scripts
 
 # -----------------------------------------------------------------------------
 # Final image — Python base (we need both python + bun + the AXL binary)

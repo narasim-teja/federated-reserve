@@ -27,6 +27,7 @@ import type { AgentConfig } from './config.ts';
 import type { DataPlaneClient } from './data-plane-client.ts';
 import type { MeshDiscovery } from './discovery.ts';
 import type { SwapExecutor } from './execute.ts';
+import { maybeInitiateCoalition, maybeInitiateSwap } from './initiate.ts';
 import type { AgentMemory } from './memory.ts';
 import type { ObserverTelemetry } from './observer-client.ts';
 import type { OgReader } from './og-reader.ts';
@@ -73,13 +74,23 @@ export function startTickLoop(deps: TickDeps): { stop: () => void } {
   // Autonomous rebalance — fire a real Trading-API swap if the live reserve
   // ratio has drifted off-target by `bps`. Conservative defaults; off
   // entirely if AUTO_REBALANCE_ENABLED=0 or if we lack a swap executor.
-  const autoRebalanceEnabled =
-    process.env.AUTO_REBALANCE_ENABLED !== '0' && !!deps.swapExecutor;
+  const autoRebalanceEnabled = process.env.AUTO_REBALANCE_ENABLED !== '0' && !!deps.swapExecutor;
   const targetReserveRatio = Number(process.env.AUTO_REBALANCE_TARGET ?? '0.20');
   const driftBps = Number(process.env.AUTO_REBALANCE_DRIFT_BPS ?? '500'); // 5%
   const minSwapUsdc = BigInt(process.env.AUTO_REBALANCE_MIN_USDC ?? '50000000'); // 50 USDC
   const maxSwapUsdc = BigInt(process.env.AUTO_REBALANCE_MAX_USDC ?? '500000000'); // 500 USDC
   const autoCooldownTicks = Number(process.env.AUTO_REBALANCE_COOLDOWN_TICKS ?? '12');
+
+  // Proactive A2A negotiation initiation. Without this nothing populates
+  // the dashboard's Negotiations tab, because the executor only RESPONDS
+  // to inbound A2A. Each non-federal agent fires a swap proposal every
+  // `swapEveryN` ticks and a coalition invite every `coalitionEveryN`
+  // ticks, with a per-agent FIPS-derived offset so 50 agents don't all
+  // flood the mesh on the same tick.
+  const initiateEnabled = process.env.INITIATE_NEGOTIATIONS_ENABLED !== '0';
+  const swapEveryN = Number(process.env.NEGOTIATE_SWAP_EVERY_N_TICKS ?? '6');
+  const coalitionEveryN = Number(process.env.NEGOTIATE_COALITION_EVERY_N_TICKS ?? '14');
+  const initiateOffset = cfg.state.fips % Math.max(1, Math.min(swapEveryN, coalitionEveryN));
 
   const tick = async () => {
     if (stopped) return;
@@ -130,6 +141,22 @@ export function startTickLoop(deps: TickDeps): { stop: () => void } {
           maxSwapUsdc,
           cooldownTicks: autoCooldownTicks,
         });
+      }
+
+      // Proactive A2A negotiations — non-federal agents only. Skipped on
+      // FED/TRS to keep the federation reserve actors out of bilateral
+      // bargaining. The peer resolver also filters them out as targets.
+      if (initiateEnabled && !isFederal && tickNo > 1) {
+        if ((tickNo + initiateOffset) % swapEveryN === 0) {
+          await maybeInitiateSwap(deps, tickNo).catch((err: unknown) => {
+            console.warn(`[${cfg.state.abbr}] initiate-swap failed: ${String(err)}`);
+          });
+        }
+        if ((tickNo + initiateOffset) % coalitionEveryN === 0) {
+          await maybeInitiateCoalition(deps, tickNo).catch((err: unknown) => {
+            console.warn(`[${cfg.state.abbr}] initiate-coalition failed: ${String(err)}`);
+          });
+        }
       }
 
       // Reflection cadence — log-based summary using OpenRouter (when enabled).
@@ -447,8 +474,7 @@ async function refreshOnchainBalances(deps: TickDeps, tickNo: number): Promise<v
   if (!next) return; // RPC failure already logged inside the reader
   const prevTotal = state.totalValueUsd;
   applyChainBalances(state, next);
-  const drift =
-    prevTotal === 0 ? 1 : Math.abs(state.totalValueUsd - prevTotal) / prevTotal;
+  const drift = prevTotal === 0 ? 1 : Math.abs(state.totalValueUsd - prevTotal) / prevTotal;
   const stateTokenLine = next.stateToken
     ? `${next.stateToken.symbol}=${trim(next.stateToken.balance)}`
     : 'no-state-token';
@@ -587,11 +613,7 @@ async function maybeAutoRebalance(
   } else {
     direction = 'sell_usdc';
     const gapUsd = (ratio - cfg.targetReserveRatio) * state.chainBalances.totalNotionalUsd;
-    amountIn = clampUsdc(
-      BigInt(Math.floor(gapUsd * 1_000_000)),
-      cfg.minSwapUsdc,
-      cfg.maxSwapUsdc,
-    );
+    amountIn = clampUsdc(BigInt(Math.floor(gapUsd * 1_000_000)), cfg.minSwapUsdc, cfg.maxSwapUsdc);
     tokenIn = usdcAddr;
     tokenOut = stAddr;
     if (amountIn > usdcRaw) amountIn = usdcRaw;
@@ -631,7 +653,10 @@ async function maybeAutoRebalance(
     telemetry?.reportSwapExecuted({
       from_fips: agentCfg.state.fips,
       to_fips: agentCfg.state.fips, // self-trade
-      give: { asset: tokenIn === usdcAddr ? 'USDC' : stateToken.symbol, amount: amountIn.toString() },
+      give: {
+        asset: tokenIn === usdcAddr ? 'USDC' : stateToken.symbol,
+        amount: amountIn.toString(),
+      },
       receive: {
         asset: tokenOut === usdcAddr ? 'USDC' : stateToken.symbol,
         amount: result.expectedOut.toString(),
@@ -653,7 +678,13 @@ async function maybeAutoRebalance(
       kind: 'decision',
       at: new Date().toISOString(),
       summary: `auto-rebalance failed: ${(err as Error).message.slice(0, 120)}`,
-      details: { tick: tickNo, direction, ratio, target: cfg.targetReserveRatio, error: String(err) },
+      details: {
+        tick: tickNo,
+        direction,
+        ratio,
+        target: cfg.targetReserveRatio,
+        error: String(err),
+      },
     });
   }
 }

@@ -46,6 +46,13 @@ x-agent-base: &agent-base
     # Override either to a real production URL when deploying outside compose.
     DATA_PLANE_URL: "http://data-plane:3002"
     OBSERVER_HTTP_URL: "http://observer:3001"
+    # Proactive A2A negotiation cadence — see .env.example for details.
+    # Defaults are conservative so the production mesh stays quiet; tune
+    # down for a more active demo, set INITIATE_NEGOTIATIONS_ENABLED=0
+    # to disable entirely (agents still respond to inbound proposals).
+    INITIATE_NEGOTIATIONS_ENABLED: "${INITIATE_NEGOTIATIONS_ENABLED:-1}"
+    NEGOTIATE_SWAP_EVERY_N_TICKS: "${NEGOTIATE_SWAP_EVERY_N_TICKS:-6}"
+    NEGOTIATE_COALITION_EVERY_N_TICKS: "${NEGOTIATE_COALITION_EVERY_N_TICKS:-14}"
   networks:
     - mesh
   depends_on:

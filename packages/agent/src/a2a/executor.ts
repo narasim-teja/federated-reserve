@@ -552,6 +552,17 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       history: [ctx.userMessage],
     } satisfies Task);
 
+    this.pushNegotiation({
+      ctx,
+      skill: 'participate-in-coalition',
+      round: 1,
+      fromFips: env.initiator_fips,
+      toFips: this.cfg.state.fips,
+      stage: 'proposal',
+      summary: `${env.coalition_tag} — "${env.topic}" — ask $${env.proposed_contribution_usd.toLocaleString()}${env.duration_days ? ` over ${env.duration_days}d` : ''}`,
+      terms: { coalition_tag: env.coalition_tag },
+    });
+
     const affinity = hasCoalitionAffinity(this.cfg.state.abbr, env.coalition_tag);
     const decision = await this.askCoalitionReasoner({
       coalition_tag: env.coalition_tag,
@@ -583,6 +594,16 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     // Multi-turn: counter_terms → InputRequired, awaiting revised_invite.
     // joined/declined → Completed.
     if (response.kind === 'counter_terms') {
+      this.pushNegotiation({
+        ctx,
+        skill: 'participate-in-coalition',
+        round: 2,
+        fromFips: this.cfg.state.fips,
+        toFips: env.initiator_fips,
+        stage: 'coalition_counter',
+        summary: `prefers $${(response.preferred_contribution_usd ?? 0).toLocaleString()}${response.preferred_duration_days ? ` over ${response.preferred_duration_days}d` : ''} — ${response.rationale}`,
+        terms: { coalition_tag: env.coalition_tag },
+      });
       bus.publish({
         kind: 'status-update',
         taskId: ctx.taskId,
@@ -597,6 +618,20 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       bus.finished();
       return;
     }
+
+    this.pushNegotiation({
+      ctx,
+      skill: 'participate-in-coalition',
+      round: 2,
+      fromFips: this.cfg.state.fips,
+      toFips: env.initiator_fips,
+      stage: response.kind === 'joined' ? 'coalition_join' : 'coalition_decline',
+      summary:
+        response.kind === 'joined'
+          ? `joins for $${response.contribution_usd.toLocaleString()} — ${response.rationale}`
+          : `declines — ${response.rationale}`,
+      terms: { coalition_tag: env.coalition_tag },
+    });
 
     bus.publish({
       kind: 'status-update',
@@ -624,6 +659,17 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       this.failTask(ctx, bus, 'revised_invite requires existing task — initial invite missing');
       return;
     }
+
+    this.pushNegotiation({
+      ctx,
+      skill: 'participate-in-coalition',
+      round: 3,
+      fromFips: env.initiator_fips,
+      toFips: this.cfg.state.fips,
+      stage: 'counter',
+      summary: `revised: $${env.proposed_contribution_usd.toLocaleString()}${env.duration_days ? ` over ${env.duration_days}d` : ''}`,
+      terms: { coalition_tag: env.coalition_tag },
+    });
 
     const affinity = hasCoalitionAffinity(this.cfg.state.abbr, env.coalition_tag);
     const decision = await this.askCoalitionReasoner({
@@ -662,6 +708,20 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
         };
       }
     }
+
+    this.pushNegotiation({
+      ctx,
+      skill: 'participate-in-coalition',
+      round: 4,
+      fromFips: this.cfg.state.fips,
+      toFips: env.initiator_fips,
+      stage: response.kind === 'joined' ? 'coalition_join' : 'coalition_decline',
+      summary:
+        response.kind === 'joined'
+          ? `final: joins for $${response.contribution_usd.toLocaleString()} — ${response.rationale}`
+          : `final: declines — ${response.rationale}`,
+      terms: { coalition_tag: env.coalition_tag },
+    });
 
     bus.publish({
       kind: 'status-update',
@@ -802,11 +862,42 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       history: [ctx.userMessage],
     } satisfies Task);
 
+    this.pushNegotiation({
+      ctx,
+      skill: 'bond-auction',
+      round: 1,
+      fromFips: env.bidder_fips,
+      toFips: this.cfg.state.fips,
+      stage: 'proposal',
+      summary: `bid ${env.bond_id}: $${env.principal_usd.toLocaleString()} @ ${env.bid_yield_bps}bps — ${env.rationale}`,
+    });
+
     const award = await this.bondAuctions.submitBidAndAwait(
       env,
       (auctionCtx) => this.evaluateBondAuction(env.bond_id, auctionCtx.bids),
       this.makeBondMintSettler(env.bond_id),
     );
+
+    const mintTx = award.kind === 'awarded' ? (award.mint_tx_hash ?? null) : null;
+    const awardSummary =
+      award.kind === 'awarded'
+        ? `awarded ${env.bond_id} @ ${env.bid_yield_bps}bps${mintTx ? ` (tx ${mintTx.slice(0, 10)}…)` : ''} — ${award.rationale}`
+        : `rejected — ${award.rationale}`;
+    this.pushNegotiation({
+      ctx,
+      skill: 'bond-auction',
+      round: 2,
+      fromFips: this.cfg.state.fips,
+      toFips: env.bidder_fips,
+      stage: award.kind === 'awarded' ? 'accept' : 'reject',
+      summary: awardSummary,
+      terms: mintTx
+        ? {
+            tx_hash: mintTx,
+            explorer_url: `https://sepolia.uniscan.xyz/tx/${mintTx}`,
+          }
+        : null,
+    });
 
     bus.publish({
       kind: 'status-update',
@@ -1137,6 +1228,16 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
       history: [ctx.userMessage],
     } satisfies Task);
 
+    this.pushNegotiation({
+      ctx,
+      skill: 'request-emergency-aid',
+      round: 1,
+      fromFips: env.requester_fips,
+      toFips: this.cfg.state.fips,
+      stage: 'proposal',
+      summary: `requests $${env.amount_usd.toLocaleString()} — ${env.reason.slice(0, 200)}`,
+    });
+
     let response: AidResponse;
     if (this.reasoner && this.cfg.reasoningEnabled) {
       try {
@@ -1198,6 +1299,26 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
         };
       }
     }
+
+    const aidTx = response.kind === 'offered' ? (response.settlement_tx_hash ?? null) : null;
+    this.pushNegotiation({
+      ctx,
+      skill: 'request-emergency-aid',
+      round: 2,
+      fromFips: this.cfg.state.fips,
+      toFips: env.requester_fips,
+      stage: response.kind === 'offered' ? 'accept' : 'reject',
+      summary:
+        response.kind === 'offered'
+          ? `offers $${response.amount_usd.toLocaleString()} @ ${response.yield_bps}bps${aidTx ? ` (tx ${aidTx.slice(0, 10)}…)` : ''} — ${response.rationale}`
+          : `declines — ${response.rationale}`,
+      terms: aidTx
+        ? {
+            tx_hash: aidTx,
+            explorer_url: `https://sepolia.uniscan.xyz/tx/${aidTx}`,
+          }
+        : null,
+    });
 
     bus.publish({
       kind: 'status-update',
@@ -1319,6 +1440,16 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
 
     const affected = env.affected_fips.includes(this.cfg.state.fips);
 
+    this.pushNegotiation({
+      ctx,
+      skill: 'coordinate-shock-response',
+      round: 1,
+      fromFips: env.initiator_fips,
+      toFips: this.cfg.state.fips,
+      stage: 'proposal',
+      summary: `${env.shock_kind} severity ${env.severity}/10 — ${env.proposed_action.slice(0, 200)}`,
+    });
+
     let response: ShockContribution;
     if (this.reasoner && this.cfg.reasoningEnabled) {
       try {
@@ -1362,6 +1493,19 @@ export class FederatedReserveAgentExecutor implements AgentExecutor {
     } else {
       response = this.shockFallback(env, affected);
     }
+
+    this.pushNegotiation({
+      ctx,
+      skill: 'coordinate-shock-response',
+      round: 2,
+      fromFips: this.cfg.state.fips,
+      toFips: env.initiator_fips,
+      stage: response.kind === 'joining' ? 'accept' : 'reject',
+      summary:
+        response.kind === 'joining'
+          ? `commits $${response.commitment_usd.toLocaleString()} — ${response.rationale}`
+          : `abstains — ${response.rationale}`,
+    });
 
     bus.publish({
       kind: 'status-update',
