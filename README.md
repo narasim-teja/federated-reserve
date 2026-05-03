@@ -16,41 +16,46 @@ minted as an ERC-7857 iNFT — a transferable, ownable AI policymaker.
 ## Architecture
 
 ```
-              ┌──────────────────────────────────────────┐
-              │   Public data (off-mesh)                 │
-              │   FRED · BLS · BEA · NOAA · GDELT        │
-              └─────────────────────┬────────────────────┘
-                                    │ HTTP poll
-                                    ▼
-              ┌──────────────────────────────────────────┐
-              │   Data plane sidecar (shared, read-only) │
-              │   :3002                                  │
-              └─────────────────────┬────────────────────┘
-                                    │
-        ┌───────────────────────────┼───────────────────────────┐
-        ▼                           ▼                           ▼
-   ┌─────────┐                 ┌─────────┐                 ┌─────────┐
-   │  Agent  │                 │  Agent  │                 │  Agent  │
-   │   MA    │  ◄── A2A ────►  │   CA    │  ◄── A2A ────►  │   TX    │ ...
-   │         │                 │         │                 │         │
-   │ ┌─────┐ │                 │ ┌─────┐ │                 │ ┌─────┐ │
-   │ │ AXL │ │  ◄── MCP ────►  │ │ AXL │ │  ◄── MCP ────►  │ │ AXL │ │
-   │ │ node│ │                 │ │ node│ │                 │ │ node│ │
-   │ └──┬──┘ │                 │ └──┬──┘ │                 │ └──┬──┘ │
-   └────┼────┘                 └────┼────┘                 └────┼────┘
-        │                           │                           │
-        │  Uniswap Trading API      │  Uniswap Trading API      │
-        ▼  (Unichain Sepolia)       ▼                           ▼
-   ┌────────────────────────────────────────────────────────────────┐
-   │        Onchain settlement: USDC ↔ State tokens via V3          │
-   │  Pools: MA/CA/TX/NY/FL/IL/WA/AK · Bonds: NY-2030, MA-2030, ... │
-   └────────────────────────────────────────────────────────────────┘
-
-   Each agent also writes its persistent memory to:
-   ┌────────────────────────────────────────────────────────────────┐
-   │   0G Storage (durable KV + log) + 0G Chain (ERC-7857 iNFT)     │
-   │   Encrypted with per-agent AES-256-GCM key sealed under owner  │
-   └────────────────────────────────────────────────────────────────┘
+            ┌─────────────────────────────────────────────────────┐
+            │      PUBLIC ECONOMIC DATA  (read-only, off-mesh)    │
+            │     FRED · BLS · BEA · Census · NOAA · GDELT        │
+            └────────────────────────┬────────────────────────────┘
+                                     │
+                       ┌─────────────┴─────────────┐
+                       │  Read-only data-plane     │  :3002
+                       │  sidecar (shared)         │
+                       └─────────────┬─────────────┘
+                                     │
+   ┌─────────────────────────────────┼─────────────────────────────────┐
+   ▼                                 ▼                                 ▼
+┌─────────┐                     ┌─────────┐                       ┌─────────┐
+│ Agent MA│        ◄ AXL ►      │ Agent CA│        ◄ AXL ►        │ Agent TX│  ...×50
+│   LLM   │                     │   LLM   │                       │   LLM   │
+└────┬────┘                     └────┬────┘                       └────┬────┘
+     │                               │                                 │
+     └───────────────────────────────┴─────────────────────────────────┘
+                                     │
+              Two protocols layered on AXL transport (no central broker)
+            ─────────────────────────────────────────────────────────────
+              MCP  (single-shot)  : query_treasury · share_indicator
+                                    share_topology  ← 1-hop gossip
+              A2A  (multi-turn)   : negotiate-bilateral-swap
+                                    bond-auction · participate-in-coalition
+                                    request-emergency-aid
+                                    coordinate-shock-response
+                                     │
+            ┌────────────────────────┴────────────────────────┐
+            ▼                                                 ▼
+   ┌──────────────────────┐                         ┌──────────────────────┐
+   │   SETTLEMENT         │                         │   PERSISTENT MEMORY  │
+   │   Unichain Sepolia   │                         │   0G Galileo         │
+   │                      │                         │                      │
+   │   Uniswap Trading    │                         │   ERC-7857 iNFT      │
+   │   API → real swaps   │                         │   + 0G Storage       │
+   │   USDC ↔ state tokens│                         │   (AES-256-GCM,      │
+   │   + bond auctions    │                         │    sealed under owner│
+   │   (coupon+maturity)  │                         │    secp256k1 pubkey) │
+   └──────────────────────┘                         └──────────────────────┘
 ```
 
 ### Three protocol layers, no central broker
